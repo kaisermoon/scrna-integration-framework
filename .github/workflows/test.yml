@@ -1,0 +1,77 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 多语言自适应：根据项目根存在的标志文件决定跑哪些语言的测试。
+# 单语言项目自动跳过其它 step；混合项目串行跑全部（同一 runner）。
+# 各语言均无 → job 仍然 SUCCESS（无测试可跑视为通过，由 reviewer 兜底）。
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ----- Python -----
+      - name: Set up Python
+        if: hashFiles('pyproject.toml', 'setup.py', 'setup.cfg', 'requirements*.txt') != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Python project dependencies
+        if: hashFiles('pyproject.toml', 'setup.py', 'setup.cfg', 'requirements*.txt') != ''
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f pyproject.toml ]; then
+            # 用重定向（不用管道）以绕开 GitHub Actions 默认的 bash -eo pipefail
+            # 失败时主动 cat 日志并发 ::warning::
+            if pip install -e ".[dev]" > /tmp/pip-install.log 2>&1; then
+              cat /tmp/pip-install.log
+            else
+              install_status=$?
+              cat /tmp/pip-install.log
+              echo "::warning::pip install -e \".[dev]\" 失败（exit=$install_status），fallback 安装 pytest 单包"
+              pip install pytest
+            fi
+          fi
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+      - name: Run pytest
+        if: hashFiles('pyproject.toml', 'setup.py', 'setup.cfg', 'requirements*.txt') != ''
+        run: |
+          if [ -d tests ]; then
+            pytest tests/ -v
+          else
+            echo "no tests/ dir; skip pytest"
+          fi
+
+      # ----- R -----
+      - name: Set up R
+        if: hashFiles('DESCRIPTION') != ''
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: "4.4"
+      - name: Run testthat
+        if: hashFiles('DESCRIPTION') != ''
+        run: |
+          Rscript -e 'install.packages(c("remotes","testthat"))'
+          Rscript -e 'remotes::install_deps(dependencies = TRUE)'
+          if [ -d tests/testthat ]; then Rscript -e 'testthat::test_dir("tests/testthat")'; else echo "no tests/testthat dir; skip"; fi
+
+      # ----- JS / TS -----
+      - name: Set up Node
+        if: hashFiles('package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - name: Run npm test
+        if: hashFiles('package.json') != ''
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          if npm run 2>/dev/null | grep -q "^  test"; then npm test; else echo "no test script; skip"; fi

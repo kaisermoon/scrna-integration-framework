@@ -1,0 +1,20 @@
+# Gitleaks configuration
+#
+# Strategy: extend default rules + path allowlist for read-only reference code.
+#
+# 现状：`references/` 已通过 `.gitignore` 完全排除在 git 之外，本规则当前不会触发；
+# 保留作为兜底——若未来误用 `git add -f` 把 references 加回 git，仍会因变量名
+# 高熵被 generic-api-key 规则误判，本 allowlist 拦下误报。
+#
+# 排除策略仅作用于 references/ 目录；项目本身代码（src/, tests/, notebooks/,
+# scripts/）仍受全部规则保护。
+
+# Inherit all default rules
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Exclude read-only reference code from secret scanning"
+paths = [
+    '''references/.*''',
+]

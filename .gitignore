@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# R
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+
+# 环境
+.env
+.env.local
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 大型数据文件（外部存放）
+data/raw/
+*.fastq
+*.fastq.gz
+*.bam
+*.bai
+*.cram
+*.h5ad
+*.rds
+*.RData
+*.h5
+*.pth
+*.pt
+*.safetensors
+
+# 分析中间产物
+results/data/
+*.tmp
+
+# === 敏感上下文（GitHub 仓库项目强制保留，禁止删除）===
+_memory.md
+planning/
+
+# === 项目级 secrets ===
+.env
+.env.local
+secrets/
+
+# === worktree（并行多 PR 工作区，不追踪到内部 git）===
+.worktrees/
+
+# === 参考代码（仅本地 lookup，不上 GitHub）===
+# 早期 GCPL_scRNA notebooks + 学生 reference code，框架成熟后可删
+references/

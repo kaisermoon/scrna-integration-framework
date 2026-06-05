@@ -1,0 +1,46 @@
+# Pre-commit hooks for GitHub-linked projects
+# 安装方式：pip install pre-commit && pre-commit install
+# 触发：git commit 时自动运行；agent 不允许 --no-verify 跳过
+#
+# 参考：项目/_GitHub项目规范.md 第七节「三层把关」
+
+repos:
+  # 通用：禁敏感文件、修复格式
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=10240]   # 单文件 ≤10MB
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-json
+
+  # 敏感文件拦截：.env / _memory.md / planning/
+  - repo: local
+    hooks:
+      - id: forbid-sensitive-files
+        name: 拒绝提交敏感文件
+        entry: "bash -c 'for f in \"$@\"; do case \"$f\" in _memory.md|planning/*|.env|.env.local|secrets/*) echo \"BLOCKED 拒绝提交敏感文件 $f\"; exit 1;; esac; done' --"
+        language: system
+        pass_filenames: true
+
+      - id: forbid-protected-branch-direct-commit
+        name: 拒绝在受保护分支直推
+        entry: "bash -c 'parent=$(git rev-parse --verify HEAD^ 2>/dev/null); [ -z \"$parent\" ] && exit 0; branch=$(git symbolic-ref --short HEAD 2>/dev/null); for protected in main release; do if [ \"$branch\" = \"$protected\" ]; then echo \"BLOCKED 受保护分支 $branch 禁止直接 commit，请创建 feature branch\"; exit 1; fi; done'"
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: commit-msg-prefix
+        name: commit message 前缀校验
+        entry: "bash -c 'msg=$(cat \"$1\"); echo \"$msg\" | grep -qE \"^(feat|fix|test|refactor|docs|chore|perf)(\\([^)]+\\))?: \" || { echo \"BLOCKED commit message 必须以 feat fix test refactor docs chore perf 之一加冒号开头\"; exit 1; }' --"
+        language: system
+        stages: [commit-msg]
+
+  # 密钥扫描：gitleaks
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
