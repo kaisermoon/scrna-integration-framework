@@ -44,6 +44,9 @@ data/raw/
 *.pt
 *.safetensors
 
+# 但 manifest 进 git（per-dataset ingest 知识，是项目资产）
+!data/*/manifest.yaml
+
 # 分析中间产物
 results/data/
 *.tmp
@@ -63,3 +66,7 @@ secrets/
 # === 参考代码（仅本地 lookup，不上 GitHub）===
 # 早期 GCPL_scRNA notebooks + 学生 reference code，框架成熟后可删
 references/
+
+# 例外：marker 库（references/markers/）是跨项目长期积累的科研资产，进 git
+!references/markers/
+!references/markers/**
