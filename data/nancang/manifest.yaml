@@ -1,0 +1,16 @@
+# Nancang et al. — GCPL scRNA-seq: gastric precancerous lesion biopsies
+# 6 samples (GC/GS/IM), 10x mtx filtered + raw, symbol genes
+
+species: "human"
+
+input:
+  format: "10x_mtx"
+  path: "data/_subset/nancang"
+  gene_id_format: "symbol"
+  raw_path: "data/_subset/nancang"
+
+source_dataset: "Nancang_2025"
+project_id: "gcpl_gastric_2026"
+disease_system: "gastric"
+
+original_annotations: []

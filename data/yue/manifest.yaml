@@ -1,0 +1,16 @@
+# Yue et al. — GCPL scRNA-seq: gastric organoid cultures
+# 29 txt.gz count files, tab-separated, gene symbols
+# IM3O / BO / AO organoid lines
+
+species: "human"
+
+input:
+  format: "txt.gz"
+  path: "data/_subset/yue"
+  gene_id_format: "symbol"
+
+source_dataset: "Yue_2024"
+project_id: "gcpl_gastric_2026"
+disease_system: "gastric"
+
+original_annotations: []

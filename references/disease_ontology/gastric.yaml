@@ -1,0 +1,54 @@
+# Minimal gastric disease ontology for GCPL pilot
+# Schema: nodes[depth-first list], each {id, label, parent, mondo}
+# Load: yaml.safe_load(open("...")) -> PI walks the dict
+#
+# Temporarily hosted under data/ because references/disease_ontology/ is gitignored
+# and needs a whitelist entry. Flag for PI: add !references/disease_ontology/** to .gitignore.
+
+ontology: "gastric"
+nodes:
+  - id: "normal"
+    label: "Normal gastric mucosa"
+    parent: null
+    mondo: "MONDO:0024516"
+
+  - id: "chronic_gastritis"
+    label: "Chronic gastritis"
+    parent: null
+    mondo: "MONDO:0005047"
+
+  - id: "CAG"
+    label: "Chronic atrophic gastritis"
+    parent: "chronic_gastritis"
+    mondo: "MONDO:0005048"
+
+  - id: "IM"
+    label: "Intestinal metaplasia"
+    parent: "CAG"
+    mondo: "MONDO:0005050"
+
+  - id: "IM_complete"
+    label: "Complete intestinal metaplasia (type I)"
+    parent: "IM"
+
+  - id: "IM_incomplete"
+    label: "Incomplete intestinal metaplasia (type II/III)"
+    parent: "IM"
+
+  - id: "dysplasia"
+    label: "Gastric dysplasia / intraepithelial neoplasia"
+    parent: "IM"
+    mondo: "MONDO:0005051"
+
+  - id: "gastric_cancer"
+    label: "Gastric adenocarcinoma"
+    parent: "dysplasia"
+    mondo: "MONDO:0001056"
+
+  - id: "gastric_cancer_intestinal"
+    label: "Intestinal-type gastric adenocarcinoma"
+    parent: "gastric_cancer"
+
+  - id: "gastric_cancer_diffuse"
+    label: "Diffuse-type gastric adenocarcinoma"
+    parent: "gastric_cancer"

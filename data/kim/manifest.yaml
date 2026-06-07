@@ -1,0 +1,28 @@
+# Kim et al. — GCPL scRNA-seq: gastric organoids across IM subtypes
+# 1498 cells, symbol genes, 10x h5ad
+
+species: "human"
+
+input:
+  format: "h5ad"
+  path: "data/_subset/kim/kim_subset.h5ad"
+  gene_id_format: "symbol"
+
+source_dataset: "Kim_2023"
+project_id: "gcpl_gastric_2026"
+disease_system: "gastric"
+
+obs_mapping:
+  sample_id: "source_file"
+  batch: "_batch"
+  disease: "condition"
+
+value_mapping:
+  disease:
+    "na": "normal_adjacent"
+    "CN": "normal"
+    "Com": "complete_IM"
+    "Incom": "incomplete_IM"
+    "SI": "small_intestine"
+
+original_annotations: []
