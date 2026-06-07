@@ -41,11 +41,23 @@
 - R ≥ 4.3（可选）：Monocle3 / InferCNV
 - 详见 `pyproject.toml`
 
+## 环境搭建
+
+本项目使用 conda 隔离环境，**禁止装入 base 或主环境**。
+
 ```bash
-# 开发安装
-pip install -e ".[dev]"
-pre-commit install
+# Python 环境（固定命名 scrna-integration）
+conda env create -f environment.yml
+conda activate scrna-integration
+
+# R 环境（固定命名 scrna-integration-r；可选，仅需下游 R 工具时安装）
+conda env create -f environment-r.yml
+conda activate scrna-integration-r
 ```
+
+开发安装（轻量，仅 pytest/ruff/pre-commit）：`conda activate scrna-integration && pip install -e ".[dev]" && pre-commit install`。完整重装流程先确保已激活 `scrna-integration` 环境。
+
+> **R 重型包单独安装**：Monocle3、hdWGCNA 等无 conda 预编译包，需在激活 `scrna-integration-r` 环境后进入 R 单独安装——`BiocManager::install("monocle3")` / `remotes::install_github("smorabit/hdWGCNA")`。详见 `environment-r.yml` 注释。
 
 ## 运行
 
