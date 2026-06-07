@@ -193,7 +193,7 @@ def _read_txt_gz(
         # Read tab-separated dense matrix (genes x cells)
         df = pd.read_csv(fp, sep="\t", index_col=0, compression="gzip")
         # Transpose to cells x genes
-        X = sp.csr_matrix(df.values.T.astype(np.float32))
+        X = sp.csr_matrix(df.values.T.astype(np.float32))  # noqa: N806  # scverse convention: canonical single-cell count matrix variable
         var = pd.DataFrame(index=df.index.values)
         obs = pd.DataFrame(index=df.columns.values)
         obs["source_dataset"] = source_dataset
@@ -248,6 +248,10 @@ def _apply_obs_mapping(adata: anndata.AnnData, manifest: dict) -> None:
 
     for target_col, mapping in value_mapping.items():
         if target_col not in adata.obs.columns:
+            warnings.warn(
+                f"value_mapping: target column '{target_col}' not found; skipping",
+                stacklevel=2,
+            )
             continue
         adata.obs[target_col] = adata.obs[target_col].map(
             lambda x, m=mapping: m.get(str(x), x)

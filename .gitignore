@@ -82,3 +82,7 @@ references/
 # 例外：marker 库（references/markers/）是跨项目长期积累的科研资产，进 git
 !references/markers/
 !references/markers/**
+
+# 例外：disease_ontology（references/disease_ontology/）跨项目共享的疾病本体，进 git
+!references/disease_ontology/
+!references/disease_ontology/**

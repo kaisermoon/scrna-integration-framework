@@ -45,9 +45,9 @@ def _make_synthetic_adata(
     else:
         var_names = [f"GENE_{i}" for i in range(n_genes)]
 
-    X = rng.poisson(5, size=(n_cells, n_genes)).astype(np.float32)
+    X = rng.poisson(5, size=(n_cells, n_genes)).astype(np.float32)  # noqa: N806  # scverse convention: canonical single-cell count matrix variable
     if sparse:
-        X = sp.csr_matrix(X)
+        X = sp.csr_matrix(X)  # noqa: N806  # scverse convention: canonical single-cell count matrix variable
 
     obs = pd.DataFrame(
         {"sample_id": [f"sample_{i % 4}" for i in range(n_cells)]},
@@ -544,3 +544,122 @@ class TestReadH5:
         cover the h5 path when a 10x h5 fixture is available.
         """
         pytest.skip("10x H5 format requires a real 10x h5 fixture (not h5ad)")
+
+
+# ---------------------------------------------------------------------------
+# Clinical metadata join
+# ---------------------------------------------------------------------------
+
+
+class TestJoinClinicalCsv:
+    def test_csv_happy_path(self):
+        """Clinical CSV joined via clinical_metadata manifest -> obs columns appear."""
+        adata = _make_synthetic_adata(n_cells=12)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+
+            csv_path = os.path.join(tmpdir, "clinical.csv")
+            pd.DataFrame({
+                "sample_id": [f"sample_{i}" for i in range(4)],
+                "age": [45, 52, 38, 61],
+                "sex": ["M", "F", "F", "M"],
+            }).to_csv(csv_path, index=False)
+
+            manifest = _make_manifest_yaml({
+                "input": {"format": "h5ad", "path": h5ad_path},
+                "clinical_metadata": [{
+                    "file": csv_path,
+                    "join_on": {
+                        "manifest_field": "sample_id",
+                        "table_column": "sample_id",
+                    },
+                }],
+            })
+            mpath = _write_manifest(manifest, tmpdir)
+            result = read_with_manifest(mpath)
+
+        assert "age" in result.obs.columns
+        assert "sex" in result.obs.columns
+        sample0 = result.obs[result.obs["sample_id"] == "sample_0"]
+        assert (sample0["age"] == 45).all()
+        assert (sample0["sex"] == "M").all()
+
+    def test_missing_file_warns_not_crashes(self):
+        """Non-existent clinical file should warn, not raise, with default on_missing=warn."""
+        adata = _make_synthetic_adata(n_cells=8)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+            manifest = _make_manifest_yaml({
+                "input": {"format": "h5ad", "path": h5ad_path},
+                "clinical_metadata": [{
+                    "file": os.path.join(tmpdir, "nonexistent.csv"),
+                    "join_on": {
+                        "manifest_field": "sample_id",
+                        "table_column": "sample_id",
+                    },
+                }],
+            })
+            mpath = _write_manifest(manifest, tmpdir)
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                result = read_with_manifest(mpath)
+            # Should warn about missing file, not raise
+            file_warnings = [
+                x for x in w if "Clinical metadata file not found" in str(x.message)
+            ]
+            assert len(file_warnings) >= 1
+
+        assert isinstance(result, anndata.AnnData)
+
+
+# ---------------------------------------------------------------------------
+# Ontology / project_specific constant injection
+# ---------------------------------------------------------------------------
+
+
+class TestInjectOntologyConstants:
+    def test_ontology_injection(self):
+        """ontology section injects constant values into every obs row."""
+        adata = _make_synthetic_adata(n_cells=10)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+            manifest = _make_manifest_yaml({
+                "input": {"format": "h5ad", "path": h5ad_path},
+                "ontology": {"tissue": "gastric mucosa"},
+            })
+            mpath = _write_manifest(manifest, tmpdir)
+            result = read_with_manifest(mpath)
+
+        assert "tissue" in result.obs.columns
+        unique_tissues = result.obs["tissue"].unique().tolist()
+        assert unique_tissues == ["gastric mucosa"]
+
+    def test_project_specific_with_source_column_and_rules(self):
+        """project_specific with source_column + rules maps existing obs column."""
+        adata = _make_synthetic_adata(n_cells=12)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+            manifest = _make_manifest_yaml({
+                "input": {"format": "h5ad", "path": h5ad_path},
+                "project_specific": {
+                    "treatment_group": {
+                        "source_column": "sample_id",
+                        "rules": {
+                            "sample_0": "control",
+                            "sample_1": "treatment",
+                        },
+                    },
+                },
+            })
+            mpath = _write_manifest(manifest, tmpdir)
+            result = read_with_manifest(mpath)
+
+        assert "treatment_group" in result.obs.columns
+        sample0 = result.obs[result.obs["sample_id"] == "sample_0"]
+        assert (sample0["treatment_group"] == "control").all()
+        sample1 = result.obs[result.obs["sample_id"] == "sample_1"]
+        assert (sample1["treatment_group"] == "treatment").all()
