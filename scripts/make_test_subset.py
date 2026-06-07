@@ -19,16 +19,13 @@ Usage:
 import gc
 import gzip
 import os
-import sys
 import warnings
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import pandas as pd
 import scanpy as sc
 import scipy.io
-import scipy.sparse as sp
 
 warnings.filterwarnings("ignore")
 
@@ -268,7 +265,7 @@ def sample_nancang() -> bool:
                         _save_mtx_10x(adata_raw_sub, out_raw)
                         print(f"    Raw: {len(matched)} matching barcodes written")
                     else:
-                        print(f"    Raw: no matching barcodes found (skipping raw)")
+                        print("    Raw: no matching barcodes found (skipping raw)")
                         del adata_raw
                 else:
                     print(f"    Raw: not available for {acc}")
@@ -431,7 +428,6 @@ def sample_yue() -> bool:
 
     # Target distribution: proportional to file count per condition
     total_files = len(count_files)
-    all_adatas = []
     condition_counts: dict[str, int] = {}
 
     for cond, files in sorted(file_groups.items()):
