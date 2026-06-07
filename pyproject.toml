@@ -49,6 +49,8 @@ batch = [
     "harmonypy>=0.0.9",
     "scvi-tools>=1.1",
     "scrublet>=0.3",
+    "igraph>=0.11",
+    "leidenalg>=0.10",
 ]
 annotation = [
     "decoupler>=1.5",
@@ -73,6 +75,8 @@ all = [
     "harmonypy>=0.0.9",
     "scvi-tools>=1.1",
     "scrublet>=0.3",
+    "igraph>=0.11",
+    "leidenalg>=0.10",
     "decoupler>=1.5",
     "mllmcelltype>=0.1",
     "openai>=1.50",
