@@ -61,6 +61,7 @@ tests/fixtures/
 
 # 分析中间产物
 results/data/
+results/figures/
 *.tmp
 
 # === 敏感上下文（GitHub 仓库项目强制保留，禁止删除）===
