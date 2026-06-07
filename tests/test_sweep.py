@@ -58,7 +58,8 @@ class TestSweep:
         sweep(_filter_fn, adata, {"threshold": [500]}, _count_scorer, out)
         rp = os.path.join(out, "sweep_report.md")
         assert os.path.exists(rp)
-        content = open(rp).read()
+        with open(rp) as f:
+            content = f.read()
         assert "threshold" in content or "Sweep" in content
 
     def test_wraps_arbitrary_callable(self):

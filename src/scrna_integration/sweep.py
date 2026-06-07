@@ -42,11 +42,11 @@ def sweep(
         rows.append({**params, **metrics})
 
     df = pd.DataFrame(rows)
-    _write_report(output_dir, df)
+    _write_report(output_dir, df, param_names)
     return df
 
 
-def _write_report(output_dir: str, df: pd.DataFrame) -> None:
+def _write_report(output_dir: str, df: pd.DataFrame, param_names: list[str]) -> None:
     """Write a minimal markdown report with the sweep results table."""
     lines = ["# Sweep Report\n", f"**{len(df)} combination(s)** evaluated.\n"]
 
@@ -56,13 +56,9 @@ def _write_report(output_dir: str, df: pd.DataFrame) -> None:
             f.write("\n".join(lines))
         return
 
-    # Separate numeric metrics from string-artifact columns for the table
-    metric_cols = [
-        c
-        for c in df.columns
-        if df[c].dtype.kind in ("f", "i") and pd.api.types.is_numeric_dtype(df[c])
-    ]
-    param_cols = [c for c in df.columns if c not in metric_cols]
+    # Separate sweep params from scorer metrics using explicit param_names
+    param_cols = [c for c in param_names if c in df.columns]
+    metric_cols = [c for c in df.columns if c not in param_cols]
 
     # Build markdown table manually (no tabulate dependency)
     all_cols = param_cols + metric_cols
