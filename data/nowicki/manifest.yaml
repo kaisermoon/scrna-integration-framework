@@ -1,0 +1,42 @@
+# Nowicki-Osuch et al. (2023) — GCPL scRNA-seq: gastric cancer + precursors
+# 2500 cells, ensembl genes, CellxGene-hosted, already QC'd + normalized
+# 27 cell types (Celltypes_global) across 4 patient statuses
+
+species: "human"
+
+input:
+  format: "h5ad"
+  path: "data/_subset/nowicki/nowicki_subset.h5ad"
+  gene_id_format: "ensembl"
+
+source_dataset: "Nowicki_2023"
+project_id: "gcpl_gastric_2026"
+disease_system: "gastric"
+
+obs_mapping:
+  sample_id: "Sample"
+  donor_id: "donor_id"
+  disease: "disease"
+  tissue: "tissue"
+  assay: "assay"
+  sex: "sex"
+  development_stage: "development_stage"
+  batch: "Batch"
+
+original_annotations:
+  - column: "Celltypes_global"
+    role: "primary"
+    granularity: "broad"
+  - column: "Patient_status"
+    role: "clinical"
+    granularity: "coarse"
+
+preprocessing_done: ["basic_filter", "doublet_removal", "normalization"]
+
+qc_overrides:
+  doublet_removal:
+    skip: true
+    reason: "Author-removed doublets; re-running scrublet would be a scientific error"
+  basic_filter:
+    skip: true
+    reason: "Author-applied QC filter; data is already clean"
