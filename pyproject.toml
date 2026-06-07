@@ -35,6 +35,7 @@ dependencies = [
     "matplotlib>=3.7",
     "seaborn>=0.13",
     "pyyaml>=6.0",
+    "mygene>=3.2",
 ]
 
 [project.optional-dependencies]
@@ -47,12 +48,44 @@ dev = [
 batch = [
     "harmonypy>=0.0.9",
     "scvi-tools>=1.1",
+    "scrublet>=0.3",
 ]
 annotation = [
     "decoupler>=1.5",
+    "mllmcelltype>=0.1",
+    "openai>=1.50",
 ]
 pseudotime = [
     "scvelo>=0.3",
+]
+downstream = [
+    "infercnvpy>=0.4",
+    "cellrank>=2.0",
+]
+abundance = [
+    "sccoda>=0.1",
+]
+rbridge = [
+    "rpy2>=3.5",
+    "anndata2ri>=0.8",
+]
+all = [
+    "harmonypy>=0.0.9",
+    "scvi-tools>=1.1",
+    "scrublet>=0.3",
+    "decoupler>=1.5",
+    "mllmcelltype>=0.1",
+    "openai>=1.50",
+    "infercnvpy>=0.4",
+    "cellrank>=2.0",
+    "sccoda>=0.1",
+    "rpy2>=3.5",
+    "anndata2ri>=0.8",
+    "scvelo>=0.3",
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "ruff>=0.4",
+    "pre-commit>=3.5",
 ]
 
 [project.urls]

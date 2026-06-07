@@ -1,0 +1,19 @@
+name: scrna-integration-r
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - r-base>=4.3
+  # === Stage 2: Ambient RNA correction (rpy2 in-notebook) ===
+  - r-soupx
+  # === Stage 7: Downstream modules (subprocess Rscript) ===
+  # Pseudobulk DEG (stage7/pseudobulk_deg)
+  - bioconductor-deseq2
+  # Cell-type scoring (stage6 annotation cross-check; stage7)
+  - bioconductor-ucell
+  # Pseudotime trajectory (stage7/pseudotime via Monocle3)
+  - bioconductor-monocle3
+  # Weighted gene co-expression network (stage7/gene_modules)
+  - r-hdwgcn
+  # === Optional: uncomment as needed ===
+  # - bioconductor-infercnv  # R-based CNV detection; prefer pure-Python infercnvpy

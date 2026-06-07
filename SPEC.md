@@ -561,6 +561,14 @@ If SoupX's rpy2 path fails after a numpy/scipy/anndata upgrade, fall back to the
 
 Two conda environment files at repo root: `environment.yml` (Python) and `environment-r.yml` (R). The R env is structured by stage so users skip optional packages (e.g. someone only doing QC skips Monocle3). README ships a one-liner `mamba env create + update` for both.
 
+**环境隔离硬规定（agent 与 PI 都必须遵守）**：所有包安装一律在**专用命名 conda 环境**内进行，**绝不允许动 base / 主环境**。
+
+- Python 环境固定命名 `scrna-integration`，R 环境固定命名 `scrna-integration-r`（写入 `environment.yml` / `environment-r.yml` 的 `name:` 字段）。
+- agent **禁止** `pip install` / `conda install` 到 base 或任意非专用环境；禁止 `conda install -n base`；禁止无隔离的全局 `pip install`。
+- 任何安装前必须先 `conda activate scrna-integration`（或 `-r`）；环境不存在则先 `conda env create -f environment.yml`。
+- CI 不实际装重型科学栈——`pyproject.toml` 与两个 `environment.yml` 是**声明**，真实安装由 PI/coder 在本地专用环境完成。验收以"依赖声明完整、smoke test（纯 import 框架包）通过、环境文件可被 conda 解析"为准，不要求 CI 跑完整安装。
+- reviewer 审 env 相关 PR 时红线检查：diff 出现写向 base/全局/非专用环境的安装命令或文档指引 → flag。
+
 ---
 
 ## Reference Data
