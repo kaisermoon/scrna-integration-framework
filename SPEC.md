@@ -672,7 +672,7 @@ When stage 6 cross-method comparison includes original author annotations (`cell
 
 ## Memory Discipline (Conventions)
 
-These are conventions documented here and enforced by **code review** (the `code_reviewer` agent flags violations). The framework does **not** ship runtime checks. Each convention has a concrete idiom PI / students copy verbatim into stage notebooks.
+These are conventions documented here and enforced by **code review** (the `code-reviewer` agent flags violations). The framework does **not** ship runtime checks. Each convention has a concrete idiom PI / students copy verbatim into stage notebooks.
 
 ### 1. Sparse `adata.X` (CSR)
 
@@ -753,7 +753,7 @@ Why this rather than a fuller check:
 
 ### Reviewer enforcement
 
-When `code_reviewer` agent reviews a PR with framework or notebook code, it flags:
+When `code-reviewer` agent reviews a PR with framework or notebook code, it flags:
 
 - `adata.X` becoming dense (hard violation)
 - `.copy()` calls without justification in surrounding code or PR description (medium issue)
@@ -761,7 +761,7 @@ When `code_reviewer` agent reviews a PR with framework or notebook code, it flag
 - `adata.write_h5ad(...)` calls without `compression="lzf"` (low issue)
 - `float64` dtype on `adata.X` post-normalize or on `obsm/X_*` matrices (low issue)
 
-Severity levels follow `code_reviewer` agent's standard verdict scale (block / request-changes / approve). Memory violations rarely block — they are corrections requested before merge.
+Severity levels follow `code-reviewer` agent's standard verdict scale (block / request-changes / approve). Memory violations rarely block — they are corrections requested before merge.
 
 ---
 

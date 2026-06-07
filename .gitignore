@@ -44,8 +44,20 @@ data/raw/
 *.pt
 *.safetensors
 
+# 10x mtx / 文本表达矩阵（含测试夹具，所有数据零进 git）
+*.mtx
+*.mtx.gz
+barcodes.tsv*
+features.tsv*
+genes.tsv*
+*.txt.gz
+data/_subset/
+tests/fixtures/
+
 # 但 manifest 进 git（per-dataset ingest 知识，是项目资产）
 !data/*/manifest.yaml
+# 抽样脚本进 git（可复现夹具，不依赖外部全量数据）
+!scripts/**
 
 # 分析中间产物
 results/data/
