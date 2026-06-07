@@ -13,13 +13,13 @@ The framework was rewritten down to three functions (`read_with_manifest`, `swee
 ## Consequences
 
 - The framework's code surface is two Python files (`io.py` + `sweep.py`) plus reference data. New contributors / agents read the entire framework in under an hour.
-- Conventions that were going to be enforced by runtime checks (`validate_obs`, `memory.check`, `lineage.show_dependents`) are now enforced by code review (the `code_reviewer` agent reads `CONTEXT.md` and flags violations on PR diffs).
+- Conventions that were going to be enforced by runtime checks (`validate_obs`, `memory.check`, `lineage.show_dependents`) are now enforced by code review (the `code-reviewer` agent reads `CONTEXT.md` and flags violations on PR diffs).
 - Stage notebooks (`notebooks/stage1_loaded.ipynb` … `stage6_per_cluster.ipynb`) carry significantly more weight in the framework's design — they're now the primary unit through which PI standardises analyses across projects. PI's later third-round feedback explicitly rejected the `_template_` prefix; notebooks ship as directly runnable code that PI edits PARAMS in, not templates to copy first.
 - The PR plan was rewritten from 10 PRs (one per stage + four infrastructure PRs) down to about 5 PRs (`pyproject` + envs / `read_with_manifest` / `sweep` + scorers + `load_markers` / a batch of stage notebooks / minimal gastric ontology + initial markers). See `_plan.md`.
 
 ## Reviewer Cheat Sheet
 
-`code_reviewer` agent uses this table to flag PRs that drift back toward the over-engineered patterns this ADR rolled back. Each row maps a pattern in PR diff to the ADR it violates and the recommended alternative. Reviewer scans this table first; only after no row matches does the agent fall back to general-purpose code review judgement.
+`code-reviewer` agent uses this table to flag PRs that drift back toward the over-engineered patterns this ADR rolled back. Each row maps a pattern in PR diff to the ADR it violates and the recommended alternative. Reviewer scans this table first; only after no row matches does the agent fall back to general-purpose code review judgement.
 
 | Pattern in PR diff | Violates | Recommended alternative |
 |---|---|---|
@@ -42,5 +42,5 @@ The framework was rewritten down to three functions (`read_with_manifest`, `swee
 | Stage notebook missing the one-line `assert sp.issparse(adata.X) and adata.X.dtype == np.float32` self-check before `write_h5ad` | Memory Discipline §"In-notebook self-check" | Add the assertion in the cell immediately before `write_h5ad`. |
 | Stage notebook drifts from its cell-sequence spec in CONTEXT.md (cells removed / reordered / renamed without justification) | Notebooks §"Cell-sequence specs are binding" | Restore missing/reordered cells, or document the deviation in the PR description. |
 
-Severity follows `code_reviewer`'s standard verdict scale (block / request-changes / approve). Architectural violations (ADR-0001/0003/0004) typically `request-changes` or `block`. Memory-discipline violations typically `request-changes` or appear as advisory comments in an otherwise `approve` verdict.
+Severity follows `code-reviewer`'s standard verdict scale (block / request-changes / approve). Architectural violations (ADR-0001/0003/0004) typically `request-changes` or `block`. Memory-discipline violations typically `request-changes` or appear as advisory comments in an otherwise `approve` verdict.
 - Future grilling rounds and PR reviews will treat any new `si.*` namespace as a red flag requiring justification under ADR-0001 / ADR-0003 / this ADR.

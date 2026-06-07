@@ -44,8 +44,16 @@ PR 计划重排：老 PR-3 拆为 PR-3a/3b/3c（主线到注释）+ PR-4（第�
 | # | PR | 范围 | 大小 | 状态 | 验收 |
 |---|------|------|------|------|------|
 | 1 | PR-0a | pyproject 依赖（scanpy / anndata / scvi-tools / harmonypy / scrublet / **infercnvpy** / **cellrank**（CytoTRACE）/ **decoupler**（pseudobulk）/ rpy2 / anndata2ri / openrouter SDK / mLLMCelltype / mygene / **sccoda** 等）+ environment.yml + environment-r.yml（含 SoupX / DESeq2 / Monocle3 / UCell / hdWGCNA 等 R 包，按 stage 分组可选装） | ≤10/400 | pending | smoke test 通过 + 双环境可装 |
-| 2 | PR-1 | `src/scrna_integration/io.py`：`read_with_manifest()` 完整实现（10x_mtx + h5ad + RDS via rpy2 + obs_mapping + value_mapping + clinical_metadata join + original_annotations 重命名 + 基因 ID 双向同步 + species 校验 + raw matrix 路径记录 + preprocessing_done/qc_overrides schema 校验）+ 5 个 GCPL manifests（最小必填优先，仅异构数据集写可选块）+ 最小 gastric ontology（5-10 节点） | 申请 size 例外 | blocked PR-0a | **GCPL 5 数据集 stage 1 端到端跑通** + 每个 dataset 出一个 stage1_loaded_v1.h5ad，含 `var["ensembl_id"]` + `adata.uns["species"]` + `adata.uns["raw_matrix_path"]`（如有） |
+| 2 | PR-1 | `src/scrna_integration/io.py`：`read_with_manifest()` 完整实现（10x_mtx + h5ad + RDS via rpy2 + obs_mapping + value_mapping + clinical_metadata join + original_annotations 重命名 + 基因 ID 双向同步 + species 校验 + raw matrix 路径记录 + preprocessing_done/qc_overrides schema 校验）+ 5 个 GCPL manifests（指向夹具 A，最小必填优先）+ 最小 gastric ontology（5-10 节点） | 申请 size 例外 | blocked PR-0a + PR-0b | **夹具 A 5 数据集 stage 1 端到端跑通** + 每个 dataset 出一个 stage1_loaded_v1.h5ad，含 `var["ensembl_id"]` + `adata.uns["species"]` + `adata.uns["raw_matrix_path"]`（如有） |
 | 3 | PR-2 | `src/scrna_integration/sweep.py`：`sweep()` 完整实现 + `src/scrna_integration/scorers.py`：常用 scorer（QC 平衡、`integration_metrics` scIB suite、silhouette + ARI clustering_metrics、annotation concordance）+ `src/scrna_integration/markers.py`：`load_markers()`（按 ADR-0005）+ `__init__.py` re-export 三函数 | ≤10/400 | blocked PR-1 | unit test：sweep wrap 任意 scanpy/scvi 函数；load_markers 三种 role 模式；integration_metrics 在合成数据上输出合理 |
+
+### 测试夹具准备（PR-0b，PR-0a 之后、PR-1 之前）
+
+> 目的：把全量 GCPL（772k 细胞）抽成最小代表性子集，整个 pilot 开发/测试在 5-10k 细胞上迭代，跑得快、不膨胀仓库。**所有数据零进 git，只提交抽样脚本 + manifest。**
+
+| # | PR | 范围 | 大小 | 状态 | 验收 |
+|---|------|------|------|------|------|
+| 3.5 | PR-0b | `scripts/make_test_subset.py`：从 `~/Works/GCPL_scRNA/`（只读）抽两套夹具到本地 `data/_subset/`（gitignore）：<br/>**夹具 A（原始异构，测 stage1-2）**：保留各源原格式——Kim 10x h5（~1500，覆盖 na/Incom/Com/CN/SI）/ Nancang 10x mtx filtered+raw（~2000，GC/GS/IM 各 2-3 样本，raw 供 SoupX）/ Tsubosaka RDS（~2000，按 major_clusters×subtype）/ Nowicki h5ad（~2500，按 Celltypes_global 27类×Patient_status 4组，主要类型≥50）/ Yue txt.gz counts（~1000，覆盖 IM/BO/AO）；合计 ~9000<br/>**夹具 B（下游，测 stage3+）**：从 `results/data_objects/02_qc_filtered_data.h5ad`(6.9G) 按疾病组抽 ~5-8k，不带细胞类型<br/>RDS 抽样段用 subprocess Rscript（ADR-0007）；脚本可复现、可调比例 | ≤10/400 | blocked PR-0a | 脚本跑通产出夹具 A 5 文件（原格式保留）+ 夹具 B 1 文件；总细胞数落在 5-10k（A）/ 5-8k（B）；细胞类型代表性由 Nowicki+Tsubosaka 作者注释承担；数据全部本地、不进 git |
 
 ### 第二阶段：主线 notebook 跑到注释（PR-3a → PR-3c）
 
@@ -80,13 +88,15 @@ PR 计划重排：老 PR-3 拆为 PR-3a/3b/3c（主线到注释）+ PR-4（第�
 
 **状态值**：`pending` | `in_progress` | `done` | `failed` | `blocked`
 
-PR-0a → PR-1 → PR-2 → PR-3a → PR-3b → PR-3c → PR-4 → PR-5 严格串行（主线 + 第一波结果）；PR-6+ 都 base 在 PR-5 之后，彼此独立，按 GCPL 实际分析需求排序，不强制全做。
+PR-0a → PR-0b（夹具）→ PR-1 → PR-2 → PR-3a → PR-3b → PR-3c → PR-4 → PR-5 严格串行（主线 + 第一波结果；PR-0b 可与 PR-1/PR-2 并行准备，但 PR-1 验收依赖夹具 A）；PR-6+ 都 base 在 PR-5 之后，彼此独立，按 GCPL 实际分析需求排序，不强制全做。
 
 ## 阻塞
 
 - PR-1 size 远超 ≤10/400 上限（read_with_manifest 涵盖 IO/schema/clinical join/RDS bridge 全栈 + 5 manifests + 1 ontology），需独立 PR 申请 size 例外
 - PR-3c / PR-6 / PR-9 size 可能超限（注释段三 notebook / 拟时序四技术 / SCENIC），需 size 例外
-- 5 个 GCPL 数据集中 Yue_SSK_2025 / Tsubosaka_2023 等的具体格式需在 PR-1 实施时确认；如未在 `data/` 物理就位，需先从 `~/Works/GCPL_scRNA/data/` 复制或软链入项目 `data/`
+- **数据全部本地、零进 git**：原始数据在 `~/Works/GCPL_scRNA/`（只读），夹具在 `data/_subset/`（gitignore）；仅抽样脚本 + manifest 进 git。换机/CI 无法直接复现真实数据 smoke test，端到端验证由 PI/coder 本地跑
+- **GCPL 无注释聚合 h5ad**（最远只到 `02_qc_filtered`）：故夹具 B 不带细胞类型；细胞类型代表性由夹具 A 中 Nowicki（27类）+ Tsubosaka（多层）作者注释承担（N1 决议）
+- 夹具 A 中 Nowicki 已 normalize（float32）、其余为 int counts；Nowicki 基因数 25853 vs 其他 38606——stage1 多源整合需处理基因交集，PR-1 实施时确认
 - PR-3c stage 6 notebook 实施前需 PI revoke 旧 OpenRouter key 并新建一个，存放 `.env`
 - stage 7 扩展模块（PR-6+）吸收 student-code 时必须按 ADR-0008 重写，禁止整段复制；reviewer 卡 Windows 硬编码路径 / `!pip install` cell / 800 行单体脚本 / 复制粘贴模板族
 
@@ -125,4 +135,4 @@ PR-0a → PR-1 → PR-2 → PR-3a → PR-3b → PR-3c → PR-4 → PR-5 严格�
 - 框架价值在"多源 IO + manifest + 临床 metadata join"和"sweep 循环 + 报告拼装"两处真空白；其他全部回归 scanpy/anndata/pandas/yaml 原生
 - LLM judge 在 stage 6 注释 cross-method comparison + sweep recommendations 仍是核心能力，但实现位置改为 stage notebook 内的 OpenRouter 直接调用，不包装为 framework 函数
 - Notebook 模板从"次要交付物"升级为"框架的主要标准化单位"——PI 通过模板传播分析流程，而非通过 API
-- 反思：第一轮 grilling 我（主 Agent）反复推过度工程方案（包装 scanpy / register_run / decorator plugin / lineage system），PI 多次纠偏。这是 LLM agent 的训练分布偏差——对"完整框架"的本能倾向。code_reviewer 应在 PR 阶段持续卡这条
+- 反思：第一轮 grilling 我（主 Agent）反复推过度工程方案（包装 scanpy / register_run / decorator plugin / lineage system），PI 多次纠偏。这是 LLM agent 的训练分布偏差——对"完整框架"的本能倾向。code-reviewer 应在 PR 阶段持续卡这条

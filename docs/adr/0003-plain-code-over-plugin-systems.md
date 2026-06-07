@@ -18,7 +18,7 @@ This rule generalises ADR-0001 (thin framework over scanpy). The same reasoning 
 
 ## Consequences
 
-- Code review (`code_reviewer` agent) treats registries and decorators as red flags requiring explicit justification.
+- Code review (`code-reviewer` agent) treats registries and decorators as red flags requiring explicit justification.
 - New PRs that add framework-internal abstractions claiming "extensibility" will be challenged to demonstrate why a plain function passed as argument cannot serve.
 - Documentation pages on "how to add a custom X" become trivial — they show a normal function definition and a list-passing call site, not a registration ceremony.
 - The framework's `__all__` / public API stays small. There is no plugin enumeration logic to maintain.
