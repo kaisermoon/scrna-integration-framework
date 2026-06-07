@@ -12,8 +12,8 @@ dependencies:
   # Cell-type scoring (stage6 annotation cross-check; stage7)
   - bioconductor-ucell
   # Pseudotime trajectory (stage7/pseudotime via Monocle3)
-  - bioconductor-monocle3
+  # - bioconductor-monocle3  # 无 conda 包；在 R 内 BiocManager::install("monocle3") 或参考官方文档
   # Weighted gene co-expression network (stage7/gene_modules)
-  - r-hdwgcn
+  # - r-hdwgcn  # 无 conda 包；在 R 内 remotes::install_github("smorabit/hdWGCNA")
   # === Optional: uncomment as needed ===
   # - bioconductor-infercnv  # R-based CNV detection; prefer pure-Python infercnvpy

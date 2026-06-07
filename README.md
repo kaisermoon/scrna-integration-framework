@@ -55,7 +55,9 @@ conda env create -f environment-r.yml
 conda activate scrna-integration-r
 ```
 
-开发安装（轻量，仅 pytest/ruff/pre-commit）：`pip install -e ".[dev]" && pre-commit install`。完整重装流程先确保已激活 `scrna-integration` 环境。
+开发安装（轻量，仅 pytest/ruff/pre-commit）：`conda activate scrna-integration && pip install -e ".[dev]" && pre-commit install`。完整重装流程先确保已激活 `scrna-integration` 环境。
+
+> **R 重型包单独安装**：Monocle3、hdWGCNA 等无 conda 预编译包，需在激活 `scrna-integration-r` 环境后进入 R 单独安装——`BiocManager::install("monocle3")` / `remotes::install_github("smorabit/hdWGCNA")`。详见 `environment-r.yml` 注释。
 
 ## 运行
 
