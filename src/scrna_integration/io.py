@@ -1,8 +1,18 @@
-"""IO module: multi-source scRNA-seq data readers with manifest-driven obs schema.
+"""IO 模块：多来源单细胞数据读取，manifest 驱动的 obs schema 标准化。
 
-The single public function ``read_with_manifest`` implements the 13 behaviors in SPEC
-"Three Functions > read_with_manifest".  Private helpers are minimal; no classes,
-registries, or plugin systems (ADR-0001 / ADR-0003).
+唯一公开函数 ``read_with_manifest``，按照 SPEC 的 13 个行为实现。
+主体按步骤分块，每块中文注释解释在做什么、为什么。
+面向非计算机专业 PI/学生：从上到下线性可读，打开文件就能看懂整个数据读取流程。
+
+复杂逻辑保留为私有 helper（含充分中文注释）：
+- _read_10x_mtx / _find_10x_dirs（多目录发现）
+- _read_txt_gz（Yue organoid 格式）
+- _read_rds（stub，待 R 环境）
+- _sync_gene_ids / _sync_symbol_to_ensembl / _mygene_symbol_to_ensembl / _sync_ensembl_to_symbol（基因 ID 双向同步）
+- _join_one_clinical_table（临床表关联）
+- _warn_layer2（Layer 2 字段校验）
+- _compute_baseline_qc（基线 QC 指标）
+- _load_manifest / _validate_manifest（manifest 加载与校验）
 """
 
 from __future__ import annotations
@@ -10,7 +20,6 @@ from __future__ import annotations
 import os
 import warnings
 from pathlib import Path
-from typing import Any
 
 import anndata
 import numpy as np
@@ -19,128 +28,239 @@ import scanpy as sc
 import scipy.sparse as sp
 import yaml
 
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
+# =============================================================================
+# 公开入口
+# =============================================================================
 
 
 def read_with_manifest(manifest_path: str) -> anndata.AnnData:
-    """Read and standardise scRNA-seq data using a per-dataset YAML manifest.
+    """读入并标准化单细胞数据——框架核心入口函数。
 
-    Implements all 13 behaviors from SPEC "The Three Functions > read_with_manifest".
+    按照 manifest YAML 配置完成 13 个标准化步骤（详见 SPEC "read_with_manifest"）。
+    读取完成后返回普通 AnnData，调用方可自由写入 h5ad 或继续下游分析。
 
-    Returns a plain ``AnnData``.  Caller does anything they want next.
+    面向非计算机专业学生：函数主体按步骤分块，每块 # === 注释 === 解释
+    在做什么、为什么这个步骤是必要的。
     """
+    # ===== 0. 加载与校验 manifest =====
     manifest = _load_manifest(manifest_path)
     _validate_manifest(manifest)
 
     source_dataset = str(manifest["source_dataset"])
     input_block = manifest["input"]
-
-    # 1. Read matrix per format
-    adata = _read_matrix(input_block, source_dataset)
-
-    # 2. Apply obs_mapping + value_mapping
-    _apply_obs_mapping(adata, manifest)
-
-    # 3. Join clinical_metadata tables
-    _join_clinical_metadata(adata, manifest)
-
-    # 4. Inject ontology / project_specific constants
-    _inject_constants(adata, manifest)
-
-    # 5. Generate cell_id
-    _generate_cell_id(adata, source_dataset)
-
-    # 6. Original annotations rename
-    _rename_original_annotations(adata, manifest)
-
-    # 7. Gene ID bidirectional sync
-    _sync_gene_ids(adata, input_block.get("gene_id_format", "auto"))
-
-    # 8. Species enforcement
-    _enforce_species(adata, manifest["species"])
-
-    # 9. Disease system propagation
-    _propagate_disease_system(adata, manifest["disease_system"])
-
-    # 10. Layer 2 strong-warn (LLM best-effort fix deferred to PR-3c)
-    _warn_layer2(adata)
-
-    # 11. Record raw matrix path
-    _record_raw_path(adata, input_block)
-
-    # 12. Baseline QC metrics
-    _compute_baseline_qc(adata)
-
-    # 13. Return AnnData — caller does everything else
-    return adata
-
-
-# ---------------------------------------------------------------------------
-# Step 1 – Matrix readers
-# ---------------------------------------------------------------------------
-
-_FORMAT_HANDLERS = {
-    "10x_mtx": "_read_10x_mtx",
-    "h5ad": "_read_h5ad",
-    "h5": "_read_h5",
-    "txt.gz": "_read_txt_gz",
-    "rds": "_read_rds",
-}
-
-
-def _read_matrix(input_block: dict[str, Any], source_dataset: str) -> anndata.AnnData:
     fmt = input_block["format"]
     path = input_block["path"]
-    handler_name = _FORMAT_HANDLERS.get(fmt)
-    if handler_name is None:
-        raise ValueError(
-            f"Unsupported input.format '{fmt}'. "
-            f"Supported: {', '.join(sorted(_FORMAT_HANDLERS))}"
+
+    # ===== 1. 读矩阵（按 format 分发）=====
+    # 不同数据集的原始存储格式不同：
+    #   10x_mtx → cellranger 输出目录（最常见）
+    #   h5ad → 别人已处理好的 AnnData 文件
+    #   h5 → 10x 官方的 HDF5 格式
+    #   txt.gz → 某些研究者自制的压缩文本矩阵
+    #   rds → Seurat R 对象（待支持）
+    # 为什么不在 manifest 里统一成一种格式：真实科研数据来源多样，
+    # 强制转换格式反而增加上游负担；框架做分发比上游做转换更省力。
+    if fmt == "h5ad":
+        # h5ad 是最简单的：直接 scanpy 读入，补上数据集标签
+        adata = sc.read_h5ad(path)
+        adata.obs["source_dataset"] = source_dataset
+    elif fmt == "h5":
+        adata = sc.read_10x_h5(path)
+        adata.obs["source_dataset"] = source_dataset
+    elif fmt == "10x_mtx":
+        # 10x mtx 需要处理多样本目录结构（见 _read_10x_mtx）
+        adata = _read_10x_mtx(path, source_dataset)
+    elif fmt == "txt.gz":
+        # Yue 等非标格式（见 _read_txt_gz）
+        adata = _read_txt_gz(path, source_dataset)
+    elif fmt == "rds":
+        raise NotImplementedError(
+            "RDS 格式尚未支持。Tsubosaka 数据集需要 R 环境（ADR-0007）。"
+            "详见 docs/adr/0007-r-bridge-tool-split.md。"
         )
-    handler = globals()[handler_name]
-    return handler(path, source_dataset, input_block)
+    else:
+        raise ValueError(
+            f"不支持的 input.format '{fmt}'。支持: 10x_mtx, h5ad, h5, txt.gz, rds"
+        )
 
+    # ===== 2. obs 列映射 + 值映射 =====
+    # 为什么需要这两步：不同数据集的 obs 列名各异——
+    # 有的叫 Sample/Patient/Group，有的叫 orig.ident/group/condition。
+    # manifest 的 obs_mapping 定义"源列→目标标准列"的对应关系。
+    # value_mapping 进一步统一值（如把 CAG_mild / CAG_severe 归为 CAG），
+    # 避免下游分析因命名细微差异而分裂分组。
+    obs_mapping = manifest.get("obs_mapping", {})
+    value_mapping = manifest.get("value_mapping", {})
+    if obs_mapping:
+        for target_col, source_col in obs_mapping.items():
+            if source_col not in adata.obs.columns:
+                warnings.warn(
+                    f"obs_mapping: 源列 '{source_col}' 在数据中未找到；无法填充 '{target_col}'",
+                    stacklevel=2,
+                )
+                continue
+            adata.obs[target_col] = adata.obs[source_col].astype(str)
 
-def _read_h5ad(path: str, source_dataset: str, _input_block: dict) -> anndata.AnnData:
-    adata = sc.read_h5ad(path)
-    adata.obs["source_dataset"] = source_dataset
+        for target_col, mapping in value_mapping.items():
+            if target_col not in adata.obs.columns:
+                warnings.warn(
+                    f"value_mapping: 目标列 '{target_col}' 未找到；跳过",
+                    stacklevel=2,
+                )
+                continue
+            adata.obs[target_col] = adata.obs[target_col].map(
+                lambda x, m=mapping: m.get(str(x), x)
+            )
+
+    # ===== 3. 关联临床信息表 =====
+    # 外部临床 metadata（xlsx/csv）中的 patient/sample 级字段
+    # （如年龄、性别、H. pylori 状态）需要合并到 obs 中。
+    # 每个表通过 join_on 指定关联键，on_missing/on_conflict 控制冲突策略。
+    tables = manifest.get("clinical_metadata", [])
+    if tables:
+        for tbl_cfg in tables:
+            _join_one_clinical_table(adata, tbl_cfg)
+
+    # ===== 4. 注入本体论与项目级常量 =====
+    # ontology: 该数据集固定的本体信息（如组织="gastric mucosa"），
+    #   每行细胞都写入相同的值，确保跨数据集分析时这些维度统一可用。
+    # project_specific: 项目自定义字段，可基于已有 obs 列映射
+    #   （如根据 Group 列推导 disease_grade），也可直接赋常量值。
+    ontology = manifest.get("ontology", {})
+    for key, value in ontology.items():
+        adata.obs[key] = value
+
+    project_specific = manifest.get("project_specific", {})
+    for col_name, cfg in project_specific.items():
+        if isinstance(cfg, dict) and "source_column" in cfg:
+            src = cfg["source_column"]
+            rules = cfg.get("rules", {})
+            if src in adata.obs.columns:
+                adata.obs[col_name] = adata.obs[src].map(
+                    lambda x, r=rules: r.get(str(x), str(x))
+                )
+        elif isinstance(cfg, dict) and "value" in cfg:
+            adata.obs[col_name] = cfg["value"]
+
+    # ===== 5. 生成全局唯一细胞 ID =====
+    # 为什么要自己生成：多个数据集整合后 barcode 会冲突。
+    # 例如 AAACCCAAGAA-1 可能同时存在于 GSE249874 和 GSE134520 中，
+    # 但它们是两个完全不同的细胞。cell_id = {数据集}_{样本}_{barcode} 确保唯一。
+    # barcode 去掉 -1 后缀（那是 10x GEM well suffix，不是细胞身份的一部分）。
+    sample = adata.obs.get("sample_id", pd.Series("unknown", index=adata.obs_names))
+    barcode = [str(bc).split("-")[0] for bc in adata.obs_names]
+    adata.obs["cell_id"] = [
+        f"{source_dataset}_{s}_{b}" for s, b in zip(sample, barcode, strict=True)
+    ]
+
+    # ===== 6. 原始作者标注列重命名 =====
+    # 格式: cell_type_original_{数据集名}_v1[{_角色}]
+    # 为什么需要重命名：不同数据集的原始作者标注列名各异
+    # （cell_type / CellType / cluster_name...），合并后需要统一命名模式
+    # 以便 stage 6 交叉比对时按来源追踪标注差异。
+    annotations = manifest.get("original_annotations", [])
+    for entry in annotations:
+        col = entry["column"]
+        role = entry.get("role", "")
+        if col not in adata.obs.columns:
+            warnings.warn(
+                f"original_annotations: 列 '{col}' 在数据中未找到；跳过",
+                stacklevel=2,
+            )
+            continue
+        suffix = f"_{role}" if role else ""
+        new_name = f"cell_type_original_{source_dataset}_v1{suffix}"
+        adata.obs[new_name] = adata.obs[col]
+
+    # ===== 7. 基因 ID 双向同步 =====
+    # 确保 var.index = gene symbol（符合 scanpy/scverse 生态惯例），
+    # 同时 var["ensembl_id"] 存储 Ensembl ID（供跨数据库查询、mygene 转换等）。
+    # 为什么需要双向：scanpy 的所有函数默认用 var.index 做基因名查找，
+    # 但跨物种比较、在线查询、某些 atlas 对齐需要 Ensembl ID。
+    # 为什么不用 Ensembl 做主索引：学生/合作者阅读 h5ad 时 human-readable
+    # 的 gene symbol 远比 ENSG 编号友好，且 scanpy 生态默认符号。
+    _sync_gene_ids(adata, input_block.get("gene_id_format", "auto"))
+
+    # ===== 8. 物种校验 =====
+    # 目前仅接受 human。为什么：不同物种的基因命名体系（小鼠首字母大写）、
+    # 标记物参考文献、参考基因组都完全不同。支持跨物种需要重新设计
+    # markers 库、QC 阈值、mygene 查询逻辑——那是另一条技术路线。
+    species = manifest["species"]
+    if species != "human":
+        raise ValueError(
+            f"物种 '{species}' 不受支持。框架目前仅接受 species='human'。"
+            f"其他物种需要新 ADR 论证技术路线。"
+        )
+    adata.uns["species"] = "human"
+
+    # ===== 9. 疾病系统传播 =====
+    # disease_system 是跨项目细胞分组的一级维度（gastric/synovium/ovary/vaginal...）。
+    # 每行细胞标记所属系统，使跨疾病整合分析能按系统分组。这是 Layer 1 必需字段。
+    adata.obs["disease_system"] = manifest["disease_system"]
+
+    # ===== 10. Layer 2 强警告 =====
+    # CellxGene 对齐的 7 个字段缺失或异常时发出警告但不阻断读取。
+    # LLM best-effort 修复延后到 PR-3c（需要 OpenRouter key）。
+    _warn_layer2(adata)
+
+    # ===== 11. 记录 raw matrix 路径 =====
+    # 为什么只记路径不加载：raw matrix（未过滤的 cellranger 输出）通常是
+    # filtered matrix 的 2-3 倍大。stage 1 加载会造成内存翻倍，而只有
+    # stage 2 的 SoupX 环境校正才真正需要它。按需加载更安全。
+    raw_path = input_block.get("raw_path")
+    adata.uns["raw_matrix_path"] = raw_path if raw_path else None
+
+    # ===== 12. 计算基线 QC 指标 =====
+    # 直接在 adata.X（原始 counts）上计算 n_genes / total_counts /
+    # pct_counts_mt / pct_counts_ribo。为什么放在读取阶段：
+    # 确保无论上游数据是否已做预处理，这些列在每个数据集中都已存在且对齐，
+    # 避免 stage 2 QC 遇到"这个数据集的 pct_mt 列去哪了"的问题。
+    _compute_baseline_qc(adata)
+
+    # ===== 13. 返回 AnnData =====
+    # 返回的是普通 AnnData 对象，没有框架特有的元数据封装。
+    # 调用方可以自由地 write_h5ad 做 checkpoint，或继续 scanpy 下游操作。
     return adata
 
 
-def _read_h5(path: str, source_dataset: str, _input_block: dict) -> anndata.AnnData:
-    adata = sc.read_10x_h5(path)
-    adata.obs["source_dataset"] = source_dataset
-    return adata
+# =============================================================================
+# 10x mtx 读取（保留，复杂：多样本目录发现 + 拼接）
+# =============================================================================
 
 
 def _read_10x_mtx(
-    path: str, source_dataset: str, _input_block: dict
+    path: str, source_dataset: str, _input_block: dict | None = None
 ) -> anndata.AnnData:
-    """Read one or more 10x mtx directories (cellranger filtered_feature_bc_matrix).
+    """读取一个或多个 10x mtx 目录（cellranger filtered_feature_bc_matrix）。
 
-    *path* may be a single ``filtered_feature_bc_matrix`` directory or a parent
-    directory whose immediate children each contain that subdirectory (Nancang).
+    *path* 可以是单个 ``filtered_feature_bc_matrix`` 目录，
+    也可以是包含多个子样本目录的父目录（如 Nancang 数据集的批量结构）。
+
+    为什么不用 scanpy 内置的多样本读取：scanpy 没有"在父目录下自动发现
+    所有 filtered_feature_bc_matrix 子目录并拼接"的功能——每个样本跑一次
+    sc.read_10x_mtx 然后 concat。这个 helper 封装了这段机械化操作。
     """
     mtx_path = Path(path)
     subdirs = _find_10x_dirs(mtx_path)
     if not subdirs:
         raise FileNotFoundError(
-            f"No 10x mtx directories found under {path}"
+            f"在 {path} 下未找到 10x mtx 目录"
         )
 
     parts: list[anndata.AnnData] = []
     for sub in sorted(subdirs):
-        sample_name = sub.parent.name if sub.name == "filtered_feature_bc_matrix" else sub.name
+        # 样本名：如果子目录叫 filtered_feature_bc_matrix，取父目录名
+        sample_name = (
+            sub.parent.name if sub.name == "filtered_feature_bc_matrix" else sub.name
+        )
         try:
             adata_part = sc.read_10x_mtx(sub, var_names="gene_symbols", cache=False)
         except Exception:
-            # Some 10x dirs may not have gene_symbols; fall back to gene_ids
+            # 某些 10x 目录可能没有 gene_symbols；回退到 gene_ids
             adata_part = sc.read_10x_mtx(sub, var_names="gene_ids", cache=False)
         adata_part.obs["source_dataset"] = source_dataset
         adata_part.obs["sample_id"] = sample_name
-        # Prefix barcodes with sample to avoid collisions
+        # barcode 加样本前缀防冲突
         adata_part.obs_names = [f"{sample_name}_{bc}" for bc in adata_part.obs_names]
         parts.append(adata_part)
 
@@ -148,7 +268,8 @@ def _read_10x_mtx(
         adata = parts[0]
     else:
         adata = anndata.concat(parts, join="outer", index_unique="-")
-        # sc.read_10x_mtx fills NaN with 0 for missing genes; make it sparse again
+        # sc.read_10x_mtx 对缺失基因自动填 0，但 concat(join='outer') 可能
+        # 产生 NaN 并 densify 矩阵；强制转回 sparse 并填 0
         if not sp.issparse(adata.X):
             adata.X = sp.csr_matrix(np.nan_to_num(adata.X, nan=0))
 
@@ -156,14 +277,20 @@ def _read_10x_mtx(
 
 
 def _find_10x_dirs(root: Path) -> list[Path]:
-    """Find filtered_feature_bc_matrix directories under *root*."""
-    # If root itself is a filtered_feature_bc_matrix
+    """在 *root* 下找到所有 filtered_feature_bc_matrix 目录。
+
+    三层搜索策略：
+    1. root 本身就是 mtx 目录（含有 matrix.mtx.gz 或 matrix.mtx）
+    2. root 下直接有 filtered_feature_bc_matrix 子目录
+    3. root 的每个子目录下找 filtered_feature_bc_matrix（多样本批量结构）
+    """
+    # root 本身就是目标
     if (root / "matrix.mtx.gz").exists() or (root / "matrix.mtx").exists():
         return [root]
-    # If root contains a filtered_feature_bc_matrix subdir
+    # root 下有 filtered_feature_bc_matrix
     if (root / "filtered_feature_bc_matrix").is_dir():
         return [root / "filtered_feature_bc_matrix"]
-    # Search children
+    # 搜索子目录
     result = []
     for child in sorted(root.iterdir()):
         if not child.is_dir():
@@ -174,26 +301,33 @@ def _find_10x_dirs(root: Path) -> list[Path]:
     return result
 
 
-def _read_txt_gz(
-    path: str, source_dataset: str, _input_block: dict
-) -> anndata.AnnData:
-    """Read tab-separated ``*.txt.gz`` count files (Yue organoid format).
+# =============================================================================
+# txt.gz 读取（保留，复杂：非标格式，基因×细胞需转置）
+# =============================================================================
 
-    Each file: first column = gene, remaining columns = cell barcodes.
-    Matrix is genes x cells; transposed to cells x genes on load.
+
+def _read_txt_gz(
+    path: str, source_dataset: str, _input_block: dict | None = None
+) -> anndata.AnnData:
+    """读取制表符分隔的 ``*.txt.gz`` 计数文件（Yue organoid 格式）。
+
+    每个文件：第一列 = 基因，其余列 = 细胞 barcode。
+    矩阵是基因×细胞，加载后转置为细胞×基因（scanpy 标准方向）。
+    为什么保留这个 reader：这种格式在非标准数据集中常见，
+    且转置 + sparse 转换 + 多文件拼接的逻辑不琐碎。
     """
     txt_dir = Path(path)
     files = sorted(txt_dir.glob("*.txt.gz"))
     if not files:
-        raise FileNotFoundError(f"No *.txt.gz files found under {path}")
+        raise FileNotFoundError(f"在 {path} 下未找到 *.txt.gz 文件")
 
     parts: list[anndata.AnnData] = []
     for fp in files:
         sample_id = fp.stem.replace("_count", "").split(".")[0]
-        # Read tab-separated dense matrix (genes x cells)
+        # 读入 tab 分隔的稠密矩阵（基因×细胞）
         df = pd.read_csv(fp, sep="\t", index_col=0, compression="gzip")
-        # Transpose to cells x genes
-        X = sp.csr_matrix(df.values.T.astype(np.float32))  # noqa: N806  # scverse convention: canonical single-cell count matrix variable
+        # 转置为细胞×基因（scanpy 标准方向）
+        X = sp.csr_matrix(df.values.T.astype(np.float32))  # noqa: N806
         var = pd.DataFrame(index=df.index.values)
         obs = pd.DataFrame(index=df.columns.values)
         obs["source_dataset"] = source_dataset
@@ -211,68 +345,34 @@ def _read_txt_gz(
     return adata
 
 
-def _read_rds(_path: str, _source_dataset: str, _input_block: dict) -> anndata.AnnData:
-    """RDS reader — **not implemented yet** (ADR-0007: RDS needs R environment).
+def _read_rds(
+    _path: str, _source_dataset: str, _input_block: dict | None = None
+) -> anndata.AnnData:
+    """RDS 读取器——**尚未实现**（需要 R 环境，见 ADR-0007）。
 
-    Tsubosaka dataset is RDS format and is skipped in PR-1 fixtures.
-    A future PR will add rpy2-based RDS reading.
+    Tsubosaka 数据集是 RDS 格式，在 PR-1 夹具中暂被跳过。
+    后续 PR 将通过 rpy2 实现 RDS 读取。
     """
     raise NotImplementedError(
-        "RDS format is not yet supported.  "
-        "The Tsubosaka dataset requires an R environment (ADR-0007).  "
-        "See docs/adr/0007-r-bridge-tool-split.md for the tool-split plan.  "
-        "This will be addressed in a future PR."
+        "RDS 格式尚未支持。"
+        "Tsubosaka 数据集需要 R 环境（ADR-0007）。"
+        "详见 docs/adr/0007-r-bridge-tool-split.md。"
+        "将在后续 PR 中实现。"
     )
 
 
-# ---------------------------------------------------------------------------
-# Step 2 – obs_mapping + value_mapping
-# ---------------------------------------------------------------------------
-
-
-def _apply_obs_mapping(adata: anndata.AnnData, manifest: dict) -> None:
-    obs_mapping = manifest.get("obs_mapping", {})
-    if not obs_mapping:
-        return
-    value_mapping = manifest.get("value_mapping", {})
-
-    for target_col, source_col in obs_mapping.items():
-        if source_col not in adata.obs.columns:
-            warnings.warn(
-                f"obs_mapping: source column '{source_col}' not found in data; "
-                f"cannot populate '{target_col}'"
-            ,
-            stacklevel=2)
-            continue
-        adata.obs[target_col] = adata.obs[source_col].astype(str)
-
-    for target_col, mapping in value_mapping.items():
-        if target_col not in adata.obs.columns:
-            warnings.warn(
-                f"value_mapping: target column '{target_col}' not found; skipping",
-                stacklevel=2,
-            )
-            continue
-        adata.obs[target_col] = adata.obs[target_col].map(
-            lambda x, m=mapping: m.get(str(x), x)
-        )
-
-
-# ---------------------------------------------------------------------------
-# Step 3 – clinical_metadata join
-# ---------------------------------------------------------------------------
-
-
-def _join_clinical_metadata(adata: anndata.AnnData, manifest: dict) -> None:
-    tables = manifest.get("clinical_metadata", [])
-    if not tables:
-        return
-
-    for tbl_cfg in tables:
-        _join_one_clinical_table(adata, tbl_cfg)
+# =============================================================================
+# 临床 metadata 关联（保留，复杂：冲突策略、左连接、重命名）
+# =============================================================================
 
 
 def _join_one_clinical_table(adata: anndata.AnnData, cfg: dict) -> None:
+    """将一个临床信息表格关联到 adata.obs（左连接）。
+
+    为什么保留：涉及多种文件格式（csv/xlsx）、skip_rows、
+    column_mapping 重命名、value_mapping 值转换、on_missing/on_conflict
+    多重策略控制——内联到 read_with_manifest 会让主函数膨胀得难以阅读。
+    """
     file_path = cfg["file"]
     sheet = cfg.get("sheet", 0)
     skip_rows = cfg.get("skip_rows", 0)
@@ -280,38 +380,43 @@ def _join_one_clinical_table(adata: anndata.AnnData, cfg: dict) -> None:
     col_mapping = cfg.get("column_mapping", {})
     val_mapping = cfg.get("value_mapping", {})
     on_missing = cfg.get("on_missing", "warn")
-    on_conflict = cfg.get("on_conflict", "metadata_wins")
+    # on_conflict reserved for future use (SPEC "metadata_wins / obs_wins / error")
 
     manifest_field = join_on["manifest_field"]
     table_column = join_on["table_column"]
 
+    # 文件不存在时的策略
     if not os.path.exists(file_path):
         if on_missing == "strict":
-            raise FileNotFoundError(f"Clinical metadata file not found: {file_path}")
-        warnings.warn(f"Clinical metadata file not found: {file_path}", stacklevel=2)
+            raise FileNotFoundError(f"临床 metadata 文件未找到: {file_path}")
+        warnings.warn(f"临床 metadata 文件未找到: {file_path}", stacklevel=2)
         return
 
+    # 读入（csv 或 xlsx）
     if file_path.endswith(".csv"):
         meta_df = pd.read_csv(file_path)
     else:
         meta_df = pd.read_excel(file_path, sheet_name=sheet, skiprows=skip_rows)
 
+    # 列名映射：把外部表的列名统一到框架标准名
     if col_mapping:
         meta_df = meta_df.rename(columns={v: k for k, v in col_mapping.items()})
 
+    # 值映射：统一取值（如 M→male, F→female）
     for col, mapping in val_mapping.items():
         if col in meta_df.columns:
             meta_df[col] = meta_df[col].map(lambda x, m=mapping: m.get(str(x), x))
 
+    # 检查关联键是否存在于 obs
     if manifest_field not in adata.obs.columns:
         warnings.warn(
-            f"Clinical join: manifest field '{manifest_field}' not found in obs; "
-            f"cannot join {file_path}"
-        ,
-        stacklevel=2)
+            f"临床关联: manifest 字段 '{manifest_field}' 在 obs 中未找到；"
+            f"无法关联 {file_path}",
+            stacklevel=2,
+        )
         return
 
-    # Merge: obs (left) ← metadata (right)
+    # 左连接：obs（左）← metadata（右）
     original_cols = set(adata.obs.columns)
     meta_cols_to_merge = [table_column] + [
         c for c in meta_df.columns
@@ -325,83 +430,23 @@ def _join_one_clinical_table(adata: anndata.AnnData, cfg: dict) -> None:
     ).set_index("index")
     adata.obs.index.name = None
 
-    # Handle on_conflict for overlapping columns
-    if on_conflict == "metadata_wins":
-        for col in meta_df.columns:
-            if col in original_cols and col != table_column:
-                # We already renamed via col_mapping; metadata version already populated
-                pass
 
-
-# ---------------------------------------------------------------------------
-# Step 4 – inject ontology / project_specific constants
-# ---------------------------------------------------------------------------
-
-
-def _inject_constants(adata: anndata.AnnData, manifest: dict) -> None:
-    ontology = manifest.get("ontology", {})
-    for key, value in ontology.items():
-        adata.obs[key] = value
-
-    project_specific = manifest.get("project_specific", {})
-    for col_name, cfg in project_specific.items():
-        if isinstance(cfg, dict) and "source_column" in cfg:
-            src = cfg["source_column"]
-            rules = cfg.get("rules", {})
-            if src in adata.obs.columns:
-                adata.obs[col_name] = adata.obs[src].map(
-                    lambda x, r=rules: r.get(str(x), str(x))
-                )
-        elif isinstance(cfg, dict) and "value" in cfg:
-            adata.obs[col_name] = cfg["value"]
-
-
-# ---------------------------------------------------------------------------
-# Step 5 – cell_id generation
-# ---------------------------------------------------------------------------
-
-
-def _generate_cell_id(adata: anndata.AnnData, source_dataset: str) -> None:
-    sample = adata.obs.get("sample_id", pd.Series("unknown", index=adata.obs_names))
-    barcode = [str(bc).split("-")[0] for bc in adata.obs_names]
-    adata.obs["cell_id"] = [
-        f"{source_dataset}_{s}_{b}"
-        for s, b in zip(sample, barcode, strict=True)
-    ]
-
-
-# ---------------------------------------------------------------------------
-# Step 6 – original_annotations rename
-# ---------------------------------------------------------------------------
-
-
-def _rename_original_annotations(adata: anndata.AnnData, manifest: dict) -> None:
-    annotations = manifest.get("original_annotations", [])
-    for entry in annotations:
-        col = entry["column"]
-        role = entry.get("role", "")
-        if col not in adata.obs.columns:
-            warnings.warn(
-                f"original_annotations: column '{col}' not found in data; skipping"
-            ,
-            stacklevel=2)
-            continue
-        source = manifest["source_dataset"]
-        suffix = f"_{role}" if role else ""
-        new_name = f"cell_type_original_{source}_v1{suffix}"
-        adata.obs[new_name] = adata.obs[col]
-
-
-# ---------------------------------------------------------------------------
-# Step 7 – gene ID bidirectional sync
-# ---------------------------------------------------------------------------
+# =============================================================================
+# 基因 ID 双向同步（保留，复杂：mygene 在线查询 + 批量处理）
+# =============================================================================
 
 
 def _sync_gene_ids(adata: anndata.AnnData, gene_id_format: str = "auto") -> None:
-    """Ensure both gene symbols (var.index) and ensembl IDs (var['ensembl_id']).
+    """确保 var.index 是 gene symbol 且 var['ensembl_id'] 有 Ensembl ID。
 
-    - If var.index is symbols: extract ensembl from var columns or query mygene.
-    - If var.index is ensembl: convert to symbols via mygene and re-index.
+    判断逻辑：
+    - var.index 是 symbol（非 ENSG 开头）→ 尝试从现有列提取或 mygene 查询 Ensembl ID
+    - var.index 是 ENSG → 尝试转换为 symbol 并设为 index，原 ENSG 存入 var['ensembl_id']
+    - gene_id_format 参数可覆盖自动检测
+
+    为什么需要这一步：scanpy 生态默认 var.index = gene symbol，
+    但某些数据集（如 CELLxGENE Census 导出的 h5ad）var.index 是 Ensembl ID，
+    不转换会导致 sc.pp.normalize_total 等函数因为 key lookup 失败而 crash。
     """
     idx_sample = str(adata.var.index[0])
     is_ensembl = idx_sample.startswith("ENSG")
@@ -415,15 +460,17 @@ def _sync_gene_ids(adata: anndata.AnnData, gene_id_format: str = "auto") -> None
 
 
 def _sync_symbol_to_ensembl(adata: anndata.AnnData) -> None:
-    """var.index is symbols; try to add var['ensembl_id'] from existing columns or mygene."""
+    """var.index 是 symbol；尝试添加 var['ensembl_id']。
+
+    优先使用已存在的列（10x 惯例的 gene_ids 列），不存在时回退 mygene 在线查询。
+    """
+    # 已有 ensembl_id 列且非全空 → 不用重复查询
     if "ensembl_id" in adata.var.columns and adata.var["ensembl_id"].notna().any():
-        # Already present — possibly from 10x gene_ids column
         return
 
-    # Check for gene_ids column (10x convention)
+    # 检查 10x 惯例的 gene_ids 列
     if "gene_ids" in adata.var.columns:
         gene_ids = adata.var["gene_ids"]
-        # gene_ids may be a string like "ENSG00000236601" or missing
         adata.var["ensembl_id"] = gene_ids.where(
             gene_ids.astype(str).str.startswith("ENSG"), ""
         )
@@ -431,12 +478,17 @@ def _sync_symbol_to_ensembl(adata: anndata.AnnData) -> None:
         if n_mapped > 0:
             return
 
-    # Fall back to mygene
+    # 回退：在线查询 mygene
     _mygene_symbol_to_ensembl(adata)
 
 
 def _mygene_symbol_to_ensembl(adata: anndata.AnnData) -> None:
-    """Query mygene to convert gene symbols to Ensembl IDs."""
+    """通过 mygene.info 在线查询 gene symbol → Ensembl ID。
+
+    批量查询（每批 1000 个基因），空结果留空并在末尾汇总警告。
+    为什么需要在线查询：本地没有完整的 symbol↔Ensembl 映射表，
+    mygene 是生物信息学界最常用的基因 ID 转换 API。
+    """
     import mygene
 
     mg = mygene.MyGeneInfo()
@@ -445,14 +497,17 @@ def _mygene_symbol_to_ensembl(adata: anndata.AnnData) -> None:
 
     batch_size = 1000
     for i in range(0, len(symbols), batch_size):
-        batch = symbols[i : i + batch_size]
+        batch = symbols[i: i + batch_size]
         try:
             results = mg.querymany(
                 batch, scopes="symbol", fields="ensembl.gene",
-                species="human", returnall=False
+                species="human", returnall=False,
             )
         except Exception:
-            warnings.warn(f"mygene query failed for batch {i}; ensembl_id left empty", stacklevel=2)
+            warnings.warn(
+                f"mygene 查询失败（批次 {i}）；对应基因的 ensembl_id 留空",
+                stacklevel=2,
+            )
             continue
         for r in results:
             query = r.get("query", "")
@@ -466,23 +521,23 @@ def _mygene_symbol_to_ensembl(adata: anndata.AnnData) -> None:
     n_missing = (adata.var["ensembl_id"] == "").sum()
     if n_missing > 0:
         warnings.warn(
-            f"Gene ID sync: {n_missing}/{len(symbols)} symbols could not be "
-            f"mapped to Ensembl IDs via mygene.  Corresponding ensembl_id entries "
-            f"left empty."
-        ,
-        stacklevel=2)
+            f"基因 ID 同步: {n_missing}/{len(symbols)} 个 symbol 无法通过 "
+            f"mygene 映射到 Ensembl ID。对应基因的 ensembl_id 留空。",
+            stacklevel=2,
+        )
 
 
 def _sync_ensembl_to_symbol(adata: anndata.AnnData) -> None:
-    """var.index is Ensembl IDs; convert to gene symbols via mygene or feature_name."""
-    # Check for feature_name column (common in CellxGene-hosted h5ads)
+    """var.index 是 Ensembl ID；转换为 gene symbol。
+
+    优先使用 var 中的 feature_name 列（CELLxGENE 惯例），
+    不存在则回退 mygene 在线查询。
+    """
+    # CELLxGENE 导出的 h5ad 常有 feature_name 列存储 gene symbol
     if "feature_name" in adata.var.columns:
         symbol_map = adata.var["feature_name"].to_dict()
-        # Use feature_name where available
         adata.var["_orig_ensembl"] = adata.var.index.values
-        new_index = [
-            symbol_map.get(eid, eid) for eid in adata.var.index
-        ]
+        new_index = [symbol_map.get(eid, eid) for eid in adata.var.index]
         adata.var.index = new_index
         adata.var.index.name = None
         adata.var["ensembl_id"] = adata.var["_orig_ensembl"]
@@ -490,9 +545,9 @@ def _sync_ensembl_to_symbol(adata: anndata.AnnData) -> None:
         n_mapped = sum(1 for v in new_index if not str(v).startswith("ENSG"))
         if n_mapped > 0:
             return
-        # feature_name didn't help (all still ENSG); fall through to mygene
+        # feature_name 没帮上忙（可能也是 ENSG 格式）；回退 mygene
 
-    # Query mygene
+    # 在线查询 mygene：Ensembl ID → gene symbol
     import mygene
 
     mg = mygene.MyGeneInfo()
@@ -501,14 +556,17 @@ def _sync_ensembl_to_symbol(adata: anndata.AnnData) -> None:
 
     batch_size = 1000
     for i in range(0, len(ensembl_ids), batch_size):
-        batch = ensembl_ids[i : i + batch_size]
+        batch = ensembl_ids[i: i + batch_size]
         try:
             results = mg.querymany(
                 batch, scopes="ensembl.gene", fields="symbol",
-                species="human", returnall=False
+                species="human", returnall=False,
             )
         except Exception:
-            warnings.warn(f"mygene query failed for batch {i}; keeping Ensembl IDs", stacklevel=2)
+            warnings.warn(
+                f"mygene 查询失败（批次 {i}）；保留 Ensembl ID 作为索引",
+                stacklevel=2,
+            )
             continue
         for r in results:
             query = r.get("query", "")
@@ -517,9 +575,7 @@ def _sync_ensembl_to_symbol(adata: anndata.AnnData) -> None:
                 symbol_map_result[query] = sym
 
     adata.var["_orig_ensembl"] = adata.var.index.values
-    new_index = [
-        symbol_map_result.get(eid, eid) for eid in adata.var.index
-    ]
+    new_index = [symbol_map_result.get(eid, eid) for eid in adata.var.index]
     adata.var.index = new_index
     adata.var.index.name = None
     adata.var["ensembl_id"] = adata.var["_orig_ensembl"]
@@ -528,43 +584,18 @@ def _sync_ensembl_to_symbol(adata: anndata.AnnData) -> None:
     n_missing = sum(1 for v in new_index if str(v).startswith("ENSG"))
     if n_missing > 0:
         warnings.warn(
-            f"Gene ID sync: {n_missing}/{len(ensembl_ids)} Ensembl IDs could not be "
-            f"mapped to gene symbols via mygene.  Keeping Ensembl IDs in var.index "
-            f"and leaving ensembl_id empty for those genes."
-        ,
-        stacklevel=2)
-        # For unmapped, leave ensembl_id empty
+            f"基因 ID 同步: {n_missing}/{len(ensembl_ids)} 个 Ensembl ID 无法通过 "
+            f"mygene 映射到 gene symbol。保留 Ensembl ID 作为索引，"
+            f"对应基因的 ensembl_id 留空。",
+            stacklevel=2,
+        )
         mask = adata.var.index.astype(str).str.startswith("ENSG")
         adata.var.loc[mask, "ensembl_id"] = ""
 
 
-# ---------------------------------------------------------------------------
-# Step 8 – species enforcement
-# ---------------------------------------------------------------------------
-
-
-def _enforce_species(adata: anndata.AnnData, species: str) -> None:
-    if species != "human":
-        raise ValueError(
-            f"species '{species}' is not supported.  "
-            f"The framework currently only accepts species='human'.  "
-            f"Other species require a new ADR."
-        )
-    adata.uns["species"] = "human"
-
-
-# ---------------------------------------------------------------------------
-# Step 9 – disease_system propagation
-# ---------------------------------------------------------------------------
-
-
-def _propagate_disease_system(adata: anndata.AnnData, disease_system: str) -> None:
-    adata.obs["disease_system"] = disease_system
-
-
-# ---------------------------------------------------------------------------
-# Step 10 – Layer 2 strong-warn
-# ---------------------------------------------------------------------------
+# =============================================================================
+# Layer 2 警告（保留，规则逻辑不琐碎）
+# =============================================================================
 
 _LAYER2_FIELDS = [
     "disease",
@@ -578,19 +609,19 @@ _LAYER2_FIELDS = [
 
 
 def _warn_layer2(adata: anndata.AnnData) -> None:
-    """Emit strong warnings for missing/malformed Layer 2 CellxGene-aligned fields.
+    """对缺失/异常的 Layer 2 CellxGene 对齐字段发出强警告。
 
-    LLM best-effort fix is deferred to PR-3c (needs OpenRouter key).
-    This function only warns and leaves NaN — never blocks ingest.
+    LLM best-effort 修复延后到 PR-3c（需要 OpenRouter key）。
+    本函数仅警告并留 NaN——绝不阻断读取。
     """
     for field in _LAYER2_FIELDS:
         if field not in adata.obs.columns:
             warnings.warn(
-                f"[Layer2] obs column '{field}' is MISSING.  "
-                f"LLM best-effort fix deferred to PR-3c.  "
-                f"Column will be created with NaN for all cells."
-            ,
-            stacklevel=2)
+                f"[Layer2] obs 列 '{field}' 缺失。"
+                f"LLM best-effort 修复延后到 PR-3c。"
+                f"所有细胞将写入 NaN。",
+                stacklevel=2,
+            )
             adata.obs[field] = np.nan
         else:
             col = adata.obs[field]
@@ -599,51 +630,49 @@ def _warn_layer2(adata: anndata.AnnData) -> None:
             n_problem = n_null + n_empty
             if n_problem > 0:
                 warnings.warn(
-                    f"[Layer2] obs column '{field}' has {n_problem}/{len(col)} "
-                    f"missing or empty values.  LLM best-effort fix deferred to PR-3c."
-                ,
-                stacklevel=2)
-            # Check for suspicious values (e.g. "unknown", "NA", "N.A.")
+                    f"[Layer2] obs 列 '{field}' 有 {n_problem}/{len(col)} 个"
+                    f"缺失或空值。LLM best-effort 修复延后到 PR-3c。",
+                    stacklevel=2,
+                )
+            # 检查"unknown""NA"等可疑值
             suspicious = col.astype(str).str.lower().isin(
                 ["unknown", "na", "n.a.", "n/a", "none", "null"]
             )
             if suspicious.any():
                 warnings.warn(
-                    f"[Layer2] obs column '{field}' has {suspicious.sum()} cells "
-                    f"with suspicious values ('unknown'/'NA' etc).  "
-                    f"LLM fix deferred to PR-3c."
-                ,
-                stacklevel=2)
+                    f"[Layer2] obs 列 '{field}' 有 {suspicious.sum()} 个细胞的值"
+                    f"是可疑占位符（'unknown'/'NA' 等）。"
+                    f"LLM 修复延后到 PR-3c。",
+                    stacklevel=2,
+                )
 
 
-# ---------------------------------------------------------------------------
-# Step 11 – record raw matrix path
-# ---------------------------------------------------------------------------
-
-
-def _record_raw_path(adata: anndata.AnnData, input_block: dict) -> None:
-    raw_path = input_block.get("raw_path")
-    if raw_path:
-        adata.uns["raw_matrix_path"] = raw_path
-    else:
-        adata.uns["raw_matrix_path"] = None
-
-
-# ---------------------------------------------------------------------------
-# Step 12 – baseline QC
-# ---------------------------------------------------------------------------
+# =============================================================================
+# 基线 QC 指标（保留，计算逻辑不琐碎）
+# =============================================================================
 
 
 def _compute_baseline_qc(adata: anndata.AnnData) -> None:
-    """Compute n_genes, total_counts, pct_counts_mt, pct_counts_ribo on adata.X."""
-    # Ensure CSR for scanpy QC functions
+    """在 adata.X 上计算 n_genes / total_counts / pct_counts_mt / pct_counts_ribo。
+
+    为什么在读取阶段计算：确保无论上游是否已做预处理，这些基本 QC 列
+    在所有数据集中都已存在且列对齐，避免 stage 2 QC 遇到缺失列分支。
+
+    MT 基因：以 MT- 开头的线粒体基因。
+    Ribo 基因：以 RPS/RPL 开头的核糖体蛋白基因。
+    """
+    # 确保 CSR 格式（scanpy QC 函数的前提）
     if not sp.issparse(adata.X):
         adata.X = sp.csr_matrix(adata.X)
 
-    adata.obs["n_genes"] = (adata.X > 0).sum(axis=1).A1 if sp.issparse(adata.X) else (adata.X > 0).sum(axis=1)
+    adata.obs["n_genes"] = (
+        (adata.X > 0).sum(axis=1).A1
+        if sp.issparse(adata.X)
+        else (adata.X > 0).sum(axis=1)
+    )
     adata.obs["total_counts"] = np.asarray(adata.X.sum(axis=1)).flatten()
 
-    # MT genes
+    # 线粒体基因比例（MT- 前缀）
     mt_mask = adata.var.index.str.startswith("MT-")
     if mt_mask.any():
         adata.obs["pct_counts_mt"] = (
@@ -652,7 +681,7 @@ def _compute_baseline_qc(adata: anndata.AnnData) -> None:
             * 100
         )
 
-    # Ribo genes
+    # 核糖体基因比例（RPS/RPL 前缀）
     ribo_mask = adata.var.index.str.startswith(("RPS", "RPL"))
     if ribo_mask.any():
         adata.obs["pct_counts_ribo"] = (
@@ -662,73 +691,77 @@ def _compute_baseline_qc(adata: anndata.AnnData) -> None:
         )
 
 
-# ---------------------------------------------------------------------------
-# Manifest loading & validation
-# ---------------------------------------------------------------------------
+# =============================================================================
+# manifest 加载与校验
+# =============================================================================
 
 
 def _load_manifest(manifest_path: str) -> dict:
+    """从 YAML 文件加载 manifest 并基础校验。"""
     path = Path(manifest_path)
     if not path.exists():
-        raise FileNotFoundError(f"Manifest file not found: {manifest_path}")
+        raise FileNotFoundError(f"Manifest 文件未找到: {manifest_path}")
     with open(path) as fh:
         manifest = yaml.safe_load(fh)
     if not isinstance(manifest, dict):
-        raise ValueError(f"Manifest at {manifest_path} is not a valid YAML mapping")
+        raise ValueError(f"Manifest {manifest_path} 不是有效的 YAML 映射")
     return manifest
 
 
 def _validate_manifest(manifest: dict) -> None:
-    """Validate manifest schema. Raises ValueError on fatal issues."""
+    """校验 manifest schema。致命问题抛出 ValueError。
 
-    # species: mandatory, currently only "human"
+    校验内容：
+    - species（必需，目前仅接受 human）
+    - input 块（format + path 必需）
+    - source_dataset / project_id / disease_system（必需）
+    - original_annotations 段（必需，即使为空列表）
+    - qc_overrides 中 skip:true 必须带 reason
+    """
+    # species 必需，目前仅 human
     species = manifest.get("species")
     if not species:
-        raise ValueError("Manifest is missing required field 'species'")
+        raise ValueError("Manifest 缺少必需字段 'species'")
     if species != "human":
         raise ValueError(
-            f"species '{species}' is not supported. Only 'human' is accepted."
+            f"物种 '{species}' 不受支持。仅接受 'human'。"
         )
 
-    # input block mandatory
+    # input 块必需
     if "input" not in manifest:
-        raise ValueError("Manifest is missing required section 'input'")
+        raise ValueError("Manifest 缺少必需段 'input'")
 
     inp = manifest["input"]
     for key in ("format", "path"):
         if key not in inp:
-            raise ValueError(f"Manifest 'input' section is missing required key '{key}'")
+            raise ValueError(f"Manifest 的 'input' 段缺少必需键 '{key}'")
 
     fmt = inp["format"]
-    if fmt not in _FORMAT_HANDLERS:
+    supported = {"10x_mtx", "h5ad", "h5", "txt.gz", "rds"}
+    if fmt not in supported:
         raise ValueError(
-            f"Unsupported input.format '{fmt}'. "
-            f"Supported: {', '.join(sorted(_FORMAT_HANDLERS))}"
+            f"不支持的 input.format '{fmt}'。支持: {', '.join(sorted(supported))}"
         )
 
-    # source_dataset mandatory
+    # 数据集标识
     if "source_dataset" not in manifest:
-        raise ValueError("Manifest is missing required field 'source_dataset'")
-
-    # project_id mandatory
+        raise ValueError("Manifest 缺少必需字段 'source_dataset'")
     if "project_id" not in manifest:
-        raise ValueError("Manifest is missing required field 'project_id'")
-
-    # disease_system mandatory
+        raise ValueError("Manifest 缺少必需字段 'project_id'")
     if "disease_system" not in manifest:
-        raise ValueError("Manifest is missing required field 'disease_system'")
+        raise ValueError("Manifest 缺少必需字段 'disease_system'")
 
-    # original_annotations section mandatory (even if [])
+    # original_annotations 段必需（即使为空列表）
     if "original_annotations" not in manifest:
         raise ValueError(
-            "Manifest is missing required section 'original_annotations' "
-            "(use [] if the dataset has no author annotations)"
+            "Manifest 缺少必需段 'original_annotations' "
+            "（若无作者标注请写 []）"
         )
 
-    # qc_overrides: reason mandatory when skip: true
+    # qc_overrides: skip:true 时 reason 必需
     for step, cfg in manifest.get("qc_overrides", {}).items():
         if cfg.get("skip") and not cfg.get("reason"):
             raise ValueError(
-                f"qc_overrides.{step}.skip is true but 'reason' is missing.  "
-                f"A reason is required when skipping a QC step."
+                f"qc_overrides.{step}.skip 为 true 但缺少 'reason'。"
+                f"跳过 QC 步骤时必须给出理由。"
             )
