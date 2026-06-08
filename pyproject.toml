@@ -54,7 +54,8 @@ batch = [
 ]
 annotation = [
     "decoupler>=1.5",
-    "mllmcelltype>=0.1",
+    "mllmcelltype>=2.0",
+    "celltypist>=1.6",
     "openai>=1.50",
 ]
 pseudotime = [
@@ -78,7 +79,8 @@ all = [
     "igraph>=0.11",
     "leidenalg>=0.10",
     "decoupler>=1.5",
-    "mllmcelltype>=0.1",
+    "mllmcelltype>=2.0",
+    "celltypist>=1.6",
     "openai>=1.50",
     "infercnvpy>=0.4",
     "cellrank>=2.0",
