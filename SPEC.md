@@ -27,15 +27,17 @@ External commitments (full docs site, semver, deprecation policy, PyPI release) 
 
 ---
 
-## Architectural Stance: Three Functions + Conventions
+## Architectural Stance: Two Functions + Scorers, Conventions
 
-**The framework code surface is intentionally tiny.** Three Python functions cover the genuine gaps in scanpy/anndata/scverse; everything else is convention plus reference data, used directly with `pandas` / `pyyaml` / `scanpy` / `anndata` native APIs.
+**The framework code surface is intentionally tiny — designed for non-CS PI/students to read line-by-line (ADR-0009).** Two Python functions cover the genuine gaps in scanpy/anndata/scverse; the scorers module provides directly-callable metric functions (no callbacks, no `sweep()` abstraction); everything else is convention plus reference data, used directly with `pandas` / `pyyaml` / `scanpy` / `anndata` native APIs.
 
 ```python
-from scrna_integration import read_with_manifest, sweep, load_markers
+from scrna_integration import read_with_manifest, load_markers
+# scorers are imported directly from the module — call in plain for loops:
+from scrna_integration.scorers import integration_metrics, clustering_metrics
 ```
 
-These are the **only** three imports a notebook ever needs from the framework. Anything else (lineage, disease ontology lookup, QC skip records, run metadata, stage reports) is plain `adata.uns[...]` writes, plain `yaml.safe_load`, plain `sc.pl.*`, or notebook cells PI / students edit directly.
+Notebooks import only what they need. Anything else (lineage, disease ontology lookup, QC skip records, run metadata, stage reports) is plain `adata.uns[...]` writes, plain `yaml.safe_load`, plain `sc.pl.*`, or notebook cells PI / students edit directly.
 
 This stance follows from:
 
@@ -58,11 +60,11 @@ The following were considered and rejected as wrapper noise:
 | `si.memory.check(adata)` | code reviewer agent enforces conventions; not a runtime function |
 | `si.scorers.qc_balance` | Plain functions in `scrna_integration/scorers.py`, importable when desired but not framework-namespaced |
 
-The framework's `__init__.py` re-exports `read_with_manifest`, `sweep`, and `load_markers`. There is no `si.*` sub-namespace tree.
+The framework's `__init__.py` re-exports `read_with_manifest` and `load_markers`. Scorers are imported directly from `scrna_integration.scorers` when needed in notebooks. There is no `si.*` sub-namespace tree.
 
-### "Three functions" is the current reality, not an eternal promise
+### "Two functions + scorers" is the current reality, not an eternal promise
 
-The current framework surface reflects today's understanding of where scanpy genuinely leaves a gap. A fourth (or further) framework function may be added when **all three** of the following are true:
+The current framework surface reflects today's understanding of where scanpy genuinely leaves a gap. A third (or further) framework function may be added when **all three** of the following are true:
 
 1. **The same boilerplate appears in ≥3 stage notebooks** with non-trivial duplication (not just a 1-liner).
 2. **The naive approach has been tried in real PR work and demonstrably caused maintenance burden** — copy-paste drift across notebooks, missed updates when the pattern needs to evolve, etc. "I anticipate this will become annoying" is not enough; the maintenance cost must already be observed (or — as with `load_markers` per ADR-0005 — PI confirms from prior real-world experience that the duplication is observed in lived practice, not anticipated).
@@ -70,11 +72,11 @@ The current framework surface reflects today's understanding of where scanpy gen
 
 This bar is intentionally high. Most candidate "abstractions" that emerge during PR work fail criterion 2 — perceived future pain is not a license to add framework code. When in doubt, accept the duplication and revisit later.
 
-If the framework grows from 3 functions to 7+, that is a signal the bar is being abused, not a signal the bar is wrong — tighten the bar (e.g. require ≥5 notebooks or PI sign-off in addition to the ADR).
+If the framework grows from 2 functions to 5+, that is a signal the bar is being abused, not a signal the bar is wrong — tighten the bar (e.g. require >=5 notebooks or PI sign-off in addition to the ADR).
 
 ---
 
-## The Three Functions
+## Two Functions + Scorers
 
 ### `read_with_manifest(manifest_path: str) -> AnnData`
 
@@ -96,18 +98,39 @@ The genuine IO gap: scanpy's readers don't unify cross-source obs schemas, don't
 
 The function is one file (`src/scrna_integration/io.py`) + minimal helpers. It does **not** call `validate_obs`, does **not** push metadata into a hidden namespace beyond `species` / `raw_matrix_path`, does **not** assign a "stage" tag. PI inspects obs after reading and decides whether the schema is OK.
 
-### `sweep(fn, adata, candidates, scorer, output_dir) -> pd.DataFrame`
+### Scorers: directly-callable metric functions (no `sweep()` abstraction)
 
-The genuine sweep gap: scanpy doesn't ship a generic "run this callable across a parameter grid, score each, write a comparison report" helper. This function:
+The `scrna_integration.scorers` module provides metric functions with simple signatures
+suitable for calling directly in notebook for loops — no callbacks, no `fn=`/`scorer=` parameters.
+Designed to be transparently readable by non-CS students (ADR-0009).
 
-1. Iterates over the Cartesian product of `candidates` (a dict of param-name → list of values).
-2. Calls `fn(adata_copy, **params)` for each combo. (`fn` is any callable — `sc.pp.filter_cells`, a scvi-tools method, a user function — no wrapping required.)
-3. Calls `scorer(adata_after, adata_before, params)` returning a dict of metrics.
-4. Collates results into a `pd.DataFrame` (one row per combo, columns = params + metric keys).
-5. Writes a markdown report to `output_dir` with the table and per-combo figures the scorer chose to save.
-6. Returns the DataFrame. **PI sorts / filters / picks however they want.**
+```python
+from scrna_integration.scorers import integration_metrics, clustering_metrics
+```
 
-`scorer` is a plain function. The "composite scorer" idea (mandatory metrics + optional rank + optional LLM judge) becomes: PI either writes one scorer that returns whatever they need, or composes several scorers manually outside `sweep()`. The framework doesn't enforce shape.
+**Explicit for-loop pattern** (replaces the removed `sweep()` function — ADR-0009):
+```python
+# Stage 4: iterate embeddings, compute metrics directly
+results = []
+for rep in use_reps:
+    adata_copy = adata.copy()
+    sc.pp.neighbors(adata_copy, use_rep=rep)
+    sc.tl.umap(adata_copy)
+    m = integration_metrics(adata_copy)   # direct call, no callback
+    results.append({"use_rep": rep, **m})
+import pandas as pd; sweep_df = pd.DataFrame(results)
+```
+
+Stage 5 uses the same pattern with `clustering_metrics` across resolutions.
+
+Available scorer functions:
+- `integration_metrics(adata, batch_key="batch", label_key=None)` — silhouette by batch + celltype
+- `clustering_metrics(adata, cluster_key=None, label_key=None)` — silhouette + ARI
+- `qc_balance(adata_after, adata_before)` — cell/gene retention after QC
+- `annotation_concordance(adata, label_a=None, label_b=None)` — Cohen's kappa
+
+All gracefully handle missing columns/embeddings by returning `_note": NaN`.
+scib-metrics is optional — `scib_available` = 0.0 when not installed.
 
 ### `load_markers(csv_path, roles=("canonical", "optional")) -> dict`
 
@@ -166,7 +189,7 @@ Two decision inputs, both first-class:
 
 PI weighs both and marks one embedding `promoted`. cellxgene_census pretrained scVI and scANVI are optional candidate cells (each with its prerequisite noted — census model coverage for the tissue / a labelled reference atlas respectively), not framework-prescribed steps.
 
-**Adding an embedding method (extension pattern).** Same scanpy-native "parallel slots" mechanism as stage-5 clustering: a new method writes `adata.obsm["X_{method}"]` and is appended to the sweep's `use_rep` candidate list. No framework change — one added cell. This is how PI plugs in new integration methods as they are published ("学术追新").
+**Adding an embedding method (extension pattern).** Same scanpy-native "parallel slots" mechanism as stage-5 clustering: a new method writes `adata.obsm["X_{method}"]` and is appended to the stage-4 notebook's `use_reps` list in the explicit for loop — one added cell, no framework change. This is how PI plugs in new integration methods as they are published.
 
 ### Stage 6.5 subset analysis
 
@@ -784,7 +807,7 @@ Methods fall into three tiers:
 **Default co-run (run together every time):**
 
 1. **Marker dotplot** — PI views dotplots of canonical/optional markers from `references/markers/{tissue}_{purpose}.csv` and manually labels each leiden cluster, writing `obs.cell_type_marker_v1`.
-2. **mLLMCelltype consensus via OpenRouter** — writes `obs.cell_type_llm_v1` + `_uncertainty` + `_consensus_log`. Same code pattern as `legacy-GCPL/06_annotation.ipynb`.
+2. **mLLMCelltype consensus via provider-direct API keys** — writes `obs.cell_type_llm_v1` + `_uncertainty` + `_consensus_log`. Same code pattern as `legacy-GCPL/06_annotation.ipynb`. Uses per-provider API keys + base URLs (no OpenRouter middleware by default). Model selection in `models=[...]` list; API routing by model name prefix. See `.env.example` for key/URL template.
 3. **Gene-set scoring** — AUCell / UCell / scanpy `score_genes` over canonical marker sets, producing continuous scores in `obs.score_*` columns. Cross-cluster summarisation (mean score + pct-positive per cluster, transition/mixed flagging) follows the pattern in `student-code/.../6.3_UCell_cluster_mean_score&pct_pos.py`. Used as supplementary evidence in cross-method comparison rather than as standalone cell-type labels.
 
 **Default-active when a reference atlas is available (data-availability gated, not preference):**
@@ -815,9 +838,10 @@ When stage 6.5 produces refined sub-cluster annotations (e.g. CD4/CD8/Treg/MAIT 
 
 Manifest's `original_annotations` section causes IO to rename author labels to `cell_type_original_{source_dataset}_v1[_{role}]`. After multi-source integration these columns are sparse (NaN on cells from datasets without that annotation). The stage 6 notebook treats them as additional methods in the cross-method comparison — the LLM verdict prompt naturally references them when present and reads `adata.uns["qc_skipped"]` so the LLM can interpret author labels in their proper QC context (see "Cross-method comparison reads QC context" in the QC Heterogeneity section).
 
-### Sweep recommendations
+### Sweep recommendations (no longer bound to `sweep()`)
 
-The stage 6 notebook ends with one final cell that constructs an LLM call to generate **sweep recommendations** based on the single-run results: which clusters had high uncertainty across methods, which methods showed systematic disagreement, which marker_db gaps the LLM observed. Output is appended to the stage 6 markdown report. PI reads recommendations and decides whether to invoke `sweep()` on annotation parameters (e.g. different LLM model sets, different scANVI references). Cost is one OpenRouter call per stage 6 run — acceptable. This is the operational form of the project's "teach AI to make initial scRNA-seq judgements" thesis.
+The stage 6 notebook ends with one final cell that constructs an LLM call to generate **sweep recommendations** based on the single-run results: which clusters had high uncertainty across methods, which methods showed systematic disagreement, which marker_db gaps the LLM observed. Output is appended to the stage 6 markdown report. PI reads recommendations and decides whether to re-run annotation with different parameters (e.g. different LLM model sets, different scANVI references). Cost is one LLM call per stage 6 run — acceptable. This is the operational form of the project's "teach AI to make initial scRNA-seq judgements" thesis.
+*Note: the `sweep()` function was removed per ADR-0009; the term "sweep recommendations" is a retained workflow concept, not a framework function.*
 
 ### Per-cluster deep profile
 
@@ -953,10 +977,14 @@ The cell sequences below are the **specification** PR-3 coder agents implement a
 [md]   ## Visual comparison (PRIMARY decision input)
 [code] # for each obsm: sc.pl.umap coloured by sample_id, batch, cell_type
        #   PI eyeballs batch integration vs biological over-mixing
-[md]   ## Sweep across embeddings with integration_metrics (corroborating metrics)
-[code] # sweep(fn=neighbors_then_umap, adata=adata,
-       #       candidates={"use_rep": [m for m in embedding_methods present]},
-       #       scorer=integration_metrics, output_dir=...)
+[md]   ## Integration sweep — explicit for loop across embeddings with integration_metrics
+[code] # for rep in [k for k in ["X_pca", "X_pca_harmony", ...] if k in adata.obsm]:
+       #     adata_copy = adata.copy()
+       #     sc.pp.neighbors(adata_copy, use_rep=rep)
+       #     sc.tl.umap(adata_copy)
+       #     m = integration_metrics(adata_copy)
+       #     results.append({"use_rep": rep, **m})
+       # sweep_df = pd.DataFrame(results); write report; display table
 [code] # PI weighs UMAP visuals + metric table, decides which to mark promoted
 [code] # adata.uns["harmony_v1"] / ["scvi_v1"] / etc. metadata writes
        # adata.uns["status"] = "experimental" (PI manually changes to "promoted" later)
@@ -981,10 +1009,13 @@ The cell sequences below are the **specification** PR-3 coder agents implement a
 [code] # imports + load
 [md]   ## Multi-resolution Leiden
 [code] # for res in resolutions: sc.tl.leiden(adata, resolution=res, key_added=f"leiden_res_{res}")
-[md]   ## Sweep across resolutions
-[code] # sweep(fn=lambda adata, resolution: sc.tl.leiden(adata, resolution=resolution),
-       #       candidates={"resolution": resolutions},
-       #       scorer=clustering_metrics)  # silhouette + ARI per resolution
+[md]   ## Clustering sweep — explicit for loop across resolutions with clustering_metrics
+[code] # for res in resolutions:
+       #     adata_copy = adata.copy()
+       #     sc.tl.leiden(adata_copy, resolution=res, key_added=f"leiden_res_{res}")
+       #     m = clustering_metrics(adata_copy)
+       #     results.append({"resolution": res, **m})
+       # sweep_df = pd.DataFrame(results); write report; display table
 [md]   ## (Optional) alternative clustering method — see "Adding a clustering method" below
 [code] # commented-out slot: any method that writes obs["{method}_clusters"] coexists
        #   with the leiden_res_* columns and is compared the same way
@@ -1008,13 +1039,14 @@ No framework code is needed for this. The extension mechanism is the same scanpy
 
 ```
 [md]   # Stage 6: Multi-method annotation + cross-method comparison
-[code] # === PARAMS === UPSTREAM_PATH, OUTPUT_PATH, MARKER_CSV, leiden_col, OPENROUTER_API_KEY
+[code] # === PARAMS === UPSTREAM_PATH, OUTPUT_PATH, MARKER_CSV, leiden_col
+       # API keys loaded from .env (see .env.example for template)
 [code] # imports + load + load_markers(MARKER_CSV)
 [md]   ## Method 1: marker dotplot (PI manually labels)
 [code] # sc.pl.dotplot(adata, var_names=markers, groupby=leiden_col)
 [code] # PI inspects, fills marker_assignments dict, then:
        # adata.obs["cell_type_marker_v1"] = adata.obs[leiden_col].map(marker_assignments)
-[md]   ## Method 2: mLLMCelltype consensus via OpenRouter
+[md]   ## Method 2: mLLMCelltype consensus via provider-direct API keys
 [code] # exact pattern from legacy-GCPL/06_annotation.ipynb
 [md]   ## Method 3: gene-set scoring (AUCell / UCell / scanpy_score)
 [code] # for cell_type, marker_list in markers.items(): sc.tl.score_genes(...)
@@ -1031,7 +1063,7 @@ No framework code is needed for this. The extension mechanism is the same scanpy
 [code] # for each available method pair: confusion matrix + Cohen's kappa + sankey
 [md]   ## LLM verdict per cluster
 [code] # construct prompt with all method labels + top markers + scores + qc_skipped context
-       # call OpenRouter, write per-cluster verdicts to results/figures/stage6_verdicts/
+       # call LLM via provider API key (from .env), write per-cluster verdicts to results/figures/stage6_verdicts/
 [md]   ## PI sets cell_type_final_v1 (manual review against verdicts)
 [code] # pi_decisions = {leiden_id: cell_type, ...}
        # adata.obs["cell_type_final_v1"] = adata.obs[leiden_col].map(pi_decisions)
@@ -1126,9 +1158,21 @@ No framework code is needed for this. The extension mechanism is the same scanpy
 
 - Every notebook starts with `# === PARAMS ===` cell — uppercase param names, explicit string paths, no magic resolution.
 - Every notebook ends with the memory discipline self-check (one-line assertion on `adata.X`) followed by `adata.write_h5ad(out, compression="lzf")` + `del adata; gc.collect()`.
-- Every notebook uses scanpy native APIs and the three framework functions (`read_with_manifest` / `sweep` / `load_markers`) only where they fill a real gap.
+- Every notebook uses scanpy native APIs and the two framework functions (`read_with_manifest` / `load_markers`) plus scorers (`from scrna_integration.scorers import ...`) only where they fill a real gap.
 - Run-metadata writes follow the "Run Metadata" section above (plain `adata.uns[key] = {...}` with versioned keys).
 - **Cell-sequence specs are binding.** When a notebook drifts from its spec (cells removed / reordered / renamed) during PR review, that is a request-changes condition unless the PR description explicitly justifies the deviation. This protects QC-report completeness, run-metadata writes, and assertion placement against erosion.
 - For multi-project work, PI uses git branches or project-specific directories — there is no framework support for "spawning a new analysis from a template", because that adds a workflow layer the framework deliberately does not own.
+
+### Comment language: Chinese, with key "why" explanations
+
+**All comments in both notebooks and src/ are in Chinese** (ADR-0009). The project's primary users are PI and non-CS students who read Chinese. Comments explain **why** a step is necessary, not just what it does:
+
+- Why `target_sum=1e4` (library-size normalization standard)
+- Why `seurat_v3` HVG (works on raw counts vs `seurat` on log-normalized)
+- Why bidirectional gene ID sync is needed (scanpy wants symbols, cross-database queries need Ensembl)
+- Why `compression="lzf"` (faster than gzip, ~30% smaller than uncompressed, preserves sparse CSR)
+- Why scVI needs `>=20` epochs (variational inference needs enough iterations to converge)
+
+Professional terms keep their English originals with Chinese explanations (e.g. "高可变基因 HVG", "批次效应 batch effect"). The goal: a student opening any notebook should understand every step within a few minutes of reading, without needing to consult external docs or an experienced bioinformatician.
 
 ---

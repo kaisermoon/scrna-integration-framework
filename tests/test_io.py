@@ -1,4 +1,4 @@
-"""Tests for scrna_integration.io — read_with_manifest and helpers."""
+"""Tests for scrna_integration.io — read_with_manifest and retained helpers."""
 
 from __future__ import annotations
 
@@ -15,9 +15,6 @@ import yaml
 
 from scrna_integration.io import (
     _compute_baseline_qc,
-    _enforce_species,
-    _generate_cell_id,
-    _rename_original_annotations,
     _sync_gene_ids,
     _validate_manifest,
     _warn_layer2,
@@ -40,14 +37,13 @@ def _make_synthetic_adata(
     if gene_index == "symbol":
         var_names = [f"GENE_{i}" for i in range(n_genes)]
     elif gene_index == "ensembl":
-        # Realistic ENSG IDs
         var_names = [f"ENSG{10000000000 + i}" for i in range(n_genes)]
     else:
         var_names = [f"GENE_{i}" for i in range(n_genes)]
 
-    X = rng.poisson(5, size=(n_cells, n_genes)).astype(np.float32)  # noqa: N806  # scverse convention: canonical single-cell count matrix variable
+    X = rng.poisson(5, size=(n_cells, n_genes)).astype(np.float32)  # noqa: N806
     if sparse:
-        X = sp.csr_matrix(X)  # noqa: N806  # scverse convention: canonical single-cell count matrix variable
+        X = sp.csr_matrix(X)  # noqa: N806
 
     obs = pd.DataFrame(
         {"sample_id": [f"sample_{i % 4}" for i in range(n_cells)]},
@@ -94,7 +90,7 @@ class TestValidateManifest:
 
     def test_non_human_species_raises(self):
         m = _make_manifest_yaml({"species": "mouse"})
-        with pytest.raises(ValueError, match="species"):
+        with pytest.raises(ValueError, match="物种"):
             _validate_manifest(m)
 
     def test_missing_input_raises(self):
@@ -110,7 +106,7 @@ class TestValidateManifest:
 
     def test_invalid_input_format_raises(self):
         m = _make_manifest_yaml({"input": {"format": "excel", "path": "/tmp/x.xlsx"}})
-        with pytest.raises(ValueError, match="Unsupported"):
+        with pytest.raises(ValueError, match="不支持"):
             _validate_manifest(m)
 
     def test_missing_source_dataset_raises(self):
@@ -144,7 +140,7 @@ class TestValidateManifest:
 
     def test_qc_overrides_skip_with_reason_passes(self):
         m = _make_manifest_yaml(
-            {"qc_overrides": {"doublet_removal": {"skip": True, "reason": "too few cells"}}}
+            {"qc_overrides": {"doublet_removal": {"skip": True, "reason": "细胞太少"}}}
         )
         _validate_manifest(m)  # should not raise
 
@@ -154,80 +150,140 @@ class TestValidateManifest:
 
 
 # ---------------------------------------------------------------------------
-# Species enforcement
+# Species enforcement (tested through read_with_manifest)
 # ---------------------------------------------------------------------------
 
 
-class TestEnforceSpecies:
-    def test_human_accepted(self):
+class TestSpecies:
+    """物种校验：仅 human 接受，其他报错。"""
+
+    def test_human_sets_uns_species(self):
+        """通过 read_with_manifest 确认 human 物种写入 uns['species']。"""
         adata = _make_synthetic_adata()
-        _enforce_species(adata, "human")
-        assert adata.uns["species"] == "human"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+            manifest = _make_manifest_yaml(
+                {"input": {"format": "h5ad", "path": h5ad_path}, "species": "human"}
+            )
+            mpath = _write_manifest(manifest, tmpdir)
+            result = read_with_manifest(mpath)
+        assert result.uns["species"] == "human"
 
     def test_non_human_raises(self):
+        """非 human 物种在 read_with_manifest 中抛出 ValueError。"""
         adata = _make_synthetic_adata()
-        with pytest.raises(ValueError, match="species.*not supported"):
-            _enforce_species(adata, "mouse")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+            manifest = _make_manifest_yaml(
+                {"input": {"format": "h5ad", "path": h5ad_path}, "species": "mouse"}
+            )
+            mpath = _write_manifest(manifest, tmpdir)
+            with pytest.raises(ValueError, match="species|物种"):
+                read_with_manifest(mpath)
 
 
 # ---------------------------------------------------------------------------
-# Cell ID generation
+# Cell ID generation (tested through read_with_manifest)
 # ---------------------------------------------------------------------------
 
 
-class TestGenerateCellId:
+class TestCellId:
+    """全局唯一细胞 ID 生成。"""
+
     def test_format(self):
+        """cell_id 格式: {数据集}_{样本}_{barcode}。"""
         adata = _make_synthetic_adata(n_cells=10, n_genes=5)
-        _generate_cell_id(adata, "TestDS")
-        assert all(adata.obs["cell_id"].str.startswith("TestDS_"))
-        assert adata.obs["cell_id"].iloc[0] == "TestDS_sample_0_cell_0"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+            manifest = _make_manifest_yaml(
+                {"input": {"format": "h5ad", "path": h5ad_path}}
+            )
+            mpath = _write_manifest(manifest, tmpdir)
+            result = read_with_manifest(mpath)
+        assert all(result.obs["cell_id"].str.startswith("Test_2024_"))
+        assert result.obs["cell_id"].iloc[0] == "Test_2024_sample_0_cell_0"
 
     def test_unique_cell_ids(self):
+        """每个细胞的 cell_id 全局唯一。"""
         adata = _make_synthetic_adata(n_cells=100)
-        _generate_cell_id(adata, "DS")
-        assert adata.obs["cell_id"].nunique() == 100
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+            manifest = _make_manifest_yaml(
+                {"input": {"format": "h5ad", "path": h5ad_path}}
+            )
+            mpath = _write_manifest(manifest, tmpdir)
+            result = read_with_manifest(mpath)
+        assert result.obs["cell_id"].nunique() == 100
 
 
 # ---------------------------------------------------------------------------
-# Original annotations rename
+# Original annotations rename (tested through read_with_manifest)
 # ---------------------------------------------------------------------------
 
 
-class TestRenameOriginalAnnotations:
+class TestOriginalAnnotations:
+    """原始作者标注列重命名。"""
+
     def test_rename_with_role(self):
+        """含 role 的列重命名为 cell_type_original_{ds}_v1_{role}。"""
         adata = _make_synthetic_adata()
         adata.obs["author_label"] = ["T_cell", "B_cell"] * 50
-        manifest = {
-            "source_dataset": "Test_2024",
-            "original_annotations": [
-                {"column": "author_label", "role": "primary", "granularity": "broad"}
-            ],
-        }
-        _rename_original_annotations(adata, manifest)
-        assert "cell_type_original_Test_2024_v1_primary" in adata.obs.columns
-        assert adata.obs["cell_type_original_Test_2024_v1_primary"].iloc[0] == "T_cell"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+            manifest = _make_manifest_yaml(
+                {
+                    "input": {"format": "h5ad", "path": h5ad_path},
+                    "original_annotations": [
+                        {"column": "author_label", "role": "primary", "granularity": "broad"}
+                    ],
+                }
+            )
+            mpath = _write_manifest(manifest, tmpdir)
+            result = read_with_manifest(mpath)
+        assert "cell_type_original_Test_2024_v1_primary" in result.obs.columns
+        assert result.obs["cell_type_original_Test_2024_v1_primary"].iloc[0] == "T_cell"
 
     def test_rename_without_role(self):
+        """无 role 的列重命名为 cell_type_original_{ds}_v1。"""
         adata = _make_synthetic_adata()
         adata.obs["label"] = ["type_A"] * 100
-        manifest = {
-            "source_dataset": "DS",
-            "original_annotations": [{"column": "label"}],
-        }
-        _rename_original_annotations(adata, manifest)
-        assert "cell_type_original_DS_v1" in adata.obs.columns
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+            manifest = _make_manifest_yaml(
+                {
+                    "input": {"format": "h5ad", "path": h5ad_path},
+                    "source_dataset": "DS",
+                    "original_annotations": [{"column": "label"}],
+                }
+            )
+            mpath = _write_manifest(manifest, tmpdir)
+            result = read_with_manifest(mpath)
+        assert "cell_type_original_DS_v1" in result.obs.columns
 
     def test_missing_column_warns(self):
+        """不存在的列发出警告但不崩溃。"""
         adata = _make_synthetic_adata()
-        manifest = {
-            "source_dataset": "DS",
-            "original_annotations": [{"column": "nonexistent"}],
-        }
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            _rename_original_annotations(adata, manifest)
-            assert len(w) == 1
-            assert "nonexistent" in str(w[0].message)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+            manifest = _make_manifest_yaml(
+                {
+                    "input": {"format": "h5ad", "path": h5ad_path},
+                    "original_annotations": [{"column": "nonexistent"}],
+                }
+            )
+            mpath = _write_manifest(manifest, tmpdir)
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                read_with_manifest(mpath)
+                assert len(w) >= 1
+                assert "nonexistent" in str(w[0].message)
 
 
 # ---------------------------------------------------------------------------
@@ -237,39 +293,33 @@ class TestRenameOriginalAnnotations:
 
 class TestSyncGeneIds:
     def test_symbol_index_with_gene_ids_column(self):
-        """When var has gene_ids column with Ensembl IDs, use it directly."""
+        """var 含 gene_ids 列（含 Ensembl ID）时直接使用。"""
         adata = _make_synthetic_adata(n_genes=10, gene_index="symbol")
-        # Add 10x-style gene_ids column
         adata.var["gene_ids"] = [f"ENSG{20000000000 + i}" for i in range(10)]
         _sync_gene_ids(adata, "auto")
         assert "ensembl_id" in adata.var.columns
         assert adata.var["ensembl_id"].iloc[0] == "ENSG20000000000"
-        # var.index should remain symbols
         assert adata.var.index[0] == "GENE_0"
 
     def test_symbol_index_no_gene_ids_falls_back_to_mygene(self):
-        """When no gene_ids column, try mygene.  At minimum, ensembl_id column is created."""
+        """无 gene_ids 列时回退 mygene。至少创建 ensembl_id 列。"""
         adata = _make_synthetic_adata(n_genes=5, gene_index="symbol")
-        # Use synthetic gene names that won't be found by mygene
         _sync_gene_ids(adata, "auto")
         assert "ensembl_id" in adata.var.columns
-        # Column should exist (may be empty for synthetic genes)
         assert adata.var["ensembl_id"].isna().sum() >= 0
 
     def test_ensembl_index_with_feature_name(self):
-        """Ensembl var.index with feature_name column -> use feature_name as index."""
-        # Start with symbols as index then replace with ensembl
+        """Ensembl 索引 + feature_name 列 → 用 feature_name 做索引。"""
         adata = _make_synthetic_adata(n_genes=5, gene_index="symbol")
-        adata.var["feature_name"] = adata.var.index.values  # Original symbols
+        adata.var["feature_name"] = adata.var.index.values
         adata.var.index = [f"ENSG{30000000000 + i}" for i in range(5)]
         _sync_gene_ids(adata, "auto")
         assert not adata.var.index[0].startswith("ENSG")
         assert "ensembl_id" in adata.var.columns
 
     def test_ensembl_index_via_mygene(self):
-        """Ensembl index without feature_name -> try mygene."""
+        """Ensembl 索引无 feature_name → 尝试 mygene。"""
         adata = _make_synthetic_adata(n_genes=3, gene_index="ensembl")
-        # Use like-looking but synthetic ensembl IDs that mygene won't find
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             _sync_gene_ids(adata, "auto")
@@ -284,7 +334,6 @@ class TestSyncGeneIds:
 class TestBaselineQC:
     def test_adds_qc_columns(self):
         adata = _make_synthetic_adata(n_cells=20, n_genes=50)
-        # Add a couple MT genes for testing
         new_var = list(adata.var.index)
         new_var[0] = "MT-CO1"
         new_var[5] = "MT-ND1"
@@ -315,13 +364,12 @@ class TestWarnLayer2:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             _warn_layer2(adata)
-            # Should warn for all 7 missing fields
             assert len(w) == 7
             for warning in w:
                 assert "Layer2" in str(warning.message)
 
     def test_does_not_raise(self):
-        """Layer 2 warnings should never raise or block."""
+        """Layer 2 警告不应抛出异常或阻塞。"""
         adata = _make_synthetic_adata()
         _warn_layer2(adata)  # should not raise
 
@@ -349,7 +397,7 @@ class TestRDS:
 
 class TestReadWithManifestSynthetic:
     def test_minimal_manifest_reads_h5ad(self):
-        """Full end-to-end with a synthetic h5ad."""
+        """最小 manifest + 合成 h5ad → 完整端到端测试。"""
         adata = _make_synthetic_adata()
         with tempfile.TemporaryDirectory() as tmpdir:
             h5ad_path = os.path.join(tmpdir, "test.h5ad")
@@ -370,7 +418,7 @@ class TestReadWithManifestSynthetic:
         assert result.obs["disease_system"].iloc[0] == "gastric"
 
     def test_obs_mapping_applied(self):
-        """obs_mapping renames columns and value_mapping transforms values."""
+        """obs_mapping 重命名列 + value_mapping 转换值。"""
         adata = _make_synthetic_adata(n_cells=10)
         adata.obs["orig_status"] = ["CAG", "IM", "normal"] * 3 + ["CAG"]
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -389,13 +437,12 @@ class TestReadWithManifestSynthetic:
             result = read_with_manifest(mpath)
 
         assert "disease" in result.obs.columns
-        # CAG -> atrophic_gastritis, IM -> metaplasia, normal unchanged
         values = set(result.obs["disease"])
         assert "atrophic_gastritis" in values
         assert "metaplasia" in values
 
     def test_original_annotations_renamed(self):
-        """Author annotation columns get renamed with source_dataset prefix."""
+        """作者标注列按 source_dataset 前缀重命名。"""
         adata = _make_synthetic_adata()
         adata.obs["CellType"] = ["T", "B"] * 50
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -415,7 +462,7 @@ class TestReadWithManifestSynthetic:
         assert "cell_type_original_Test_2024_v1_primary" in result.obs.columns
 
     def test_species_non_human_fails(self):
-        """Non-human species should raise ValueError."""
+        """非 human 物种在 read_with_manifest 中抛出 ValueError。"""
         adata = _make_synthetic_adata()
         with tempfile.TemporaryDirectory() as tmpdir:
             h5ad_path = os.path.join(tmpdir, "test.h5ad")
@@ -424,11 +471,11 @@ class TestReadWithManifestSynthetic:
                 {"input": {"format": "h5ad", "path": h5ad_path}, "species": "mouse"}
             )
             mpath = _write_manifest(manifest, tmpdir)
-            with pytest.raises(ValueError, match="species"):
+            with pytest.raises(ValueError, match="species|物种"):
                 read_with_manifest(mpath)
 
     def test_raw_path_recorded(self):
-        """raw_path in input block -> adata.uns['raw_matrix_path']."""
+        """input.raw_path → adata.uns['raw_matrix_path']。"""
         adata = _make_synthetic_adata()
         with tempfile.TemporaryDirectory() as tmpdir:
             h5ad_path = os.path.join(tmpdir, "test.h5ad")
@@ -447,6 +494,7 @@ class TestReadWithManifestSynthetic:
         assert result.uns["raw_matrix_path"] == "/some/raw/path"
 
     def test_no_raw_path_gives_none(self):
+        """无 raw_path → adata.uns['raw_matrix_path'] = None。"""
         adata = _make_synthetic_adata()
         with tempfile.TemporaryDirectory() as tmpdir:
             h5ad_path = os.path.join(tmpdir, "test.h5ad")
@@ -466,25 +514,22 @@ class TestReadWithManifestSynthetic:
 
 class TestRead10xMtx:
     def test_reads_single_10x_dir(self):
-        """Read a 10x mtx directory written by scanpy."""
+        """读取含 10x mtx 格式文件的目录。"""
         adata = _make_synthetic_adata(n_cells=30, n_genes=10)
         with tempfile.TemporaryDirectory() as tmpdir:
             mtx_dir = os.path.join(tmpdir, "filtered_feature_bc_matrix")
             os.makedirs(mtx_dir)
-            # Write in 10x format (scanpy expects .mtx.gz)
             import gzip
             import io as sys_io
 
             scipy_io = pytest.importorskip("scipy.io")
             buf = sys_io.BytesIO()
-            scipy_io.mmwrite(buf, adata.X.T)  # 10x convention: genes x cells
+            scipy_io.mmwrite(buf, adata.X.T)  # 10x 惯例: genes × cells
             with gzip.open(os.path.join(mtx_dir, "matrix.mtx.gz"), "wb") as f:
                 f.write(buf.getvalue())
-            # features.tsv.gz
             with gzip.open(os.path.join(mtx_dir, "features.tsv.gz"), "wt") as f:
                 for g in adata.var.index:
                     f.write(f"{g}\t{g}\tGene Expression\n")
-            # barcodes.tsv.gz
             with gzip.open(os.path.join(mtx_dir, "barcodes.tsv.gz"), "wt") as f:
                 for bc in adata.obs_names:
                     f.write(f"{bc}\n")
@@ -507,9 +552,8 @@ class TestRead10xMtx:
 
 class TestReadTxtGz:
     def test_reads_txt_gz_directory(self):
-        """Read tab-separated gzipped count matrix."""
+        """读取 tab 分隔的 gzip 压缩计数矩阵。"""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a txt.gz file in gene x cells layout
             import gzip
 
             cells = ["cell_1", "cell_2", "cell_3"]
@@ -537,13 +581,8 @@ class TestReadTxtGz:
 
 class TestReadH5:
     def test_reads_10x_h5(self):
-        """Read a 10x .h5 file — requires real 10x HDF5 format fixture.
-
-        Synthetic h5ad files cannot substitute for the 10x HDF5 format
-        (different HDF5 structure).  The end-to-end tests on real datasets
-        cover the h5 path when a 10x h5 fixture is available.
-        """
-        pytest.skip("10x H5 format requires a real 10x h5 fixture (not h5ad)")
+        """10x .h5 文件需要真实 10x HDF5 格式夹具。"""
+        pytest.skip("10x H5 格式需要真实 10x h5 夹具（非 h5ad）")
 
 
 # ---------------------------------------------------------------------------
@@ -553,7 +592,7 @@ class TestReadH5:
 
 class TestJoinClinicalCsv:
     def test_csv_happy_path(self):
-        """Clinical CSV joined via clinical_metadata manifest -> obs columns appear."""
+        """临床 CSV 通过 clinical_metadata 配置关联到 obs。"""
         adata = _make_synthetic_adata(n_cells=12)
         with tempfile.TemporaryDirectory() as tmpdir:
             h5ad_path = os.path.join(tmpdir, "test.h5ad")
@@ -586,7 +625,7 @@ class TestJoinClinicalCsv:
         assert (sample0["sex"] == "M").all()
 
     def test_missing_file_warns_not_crashes(self):
-        """Non-existent clinical file should warn, not raise, with default on_missing=warn."""
+        """不存在的临床文件应警告而非崩溃（默认 on_missing=warn）。"""
         adata = _make_synthetic_adata(n_cells=8)
         with tempfile.TemporaryDirectory() as tmpdir:
             h5ad_path = os.path.join(tmpdir, "test.h5ad")
@@ -605,9 +644,8 @@ class TestJoinClinicalCsv:
             with warnings.catch_warnings(record=True) as w:
                 warnings.simplefilter("always")
                 result = read_with_manifest(mpath)
-            # Should warn about missing file, not raise
             file_warnings = [
-                x for x in w if "Clinical metadata file not found" in str(x.message)
+                x for x in w if "临床 metadata 文件未找到" in str(x.message)
             ]
             assert len(file_warnings) >= 1
 
@@ -621,7 +659,7 @@ class TestJoinClinicalCsv:
 
 class TestInjectOntologyConstants:
     def test_ontology_injection(self):
-        """ontology section injects constant values into every obs row."""
+        """ontology 段：常量值写入每行 obs。"""
         adata = _make_synthetic_adata(n_cells=10)
         with tempfile.TemporaryDirectory() as tmpdir:
             h5ad_path = os.path.join(tmpdir, "test.h5ad")
@@ -638,7 +676,7 @@ class TestInjectOntologyConstants:
         assert unique_tissues == ["gastric mucosa"]
 
     def test_project_specific_with_source_column_and_rules(self):
-        """project_specific with source_column + rules maps existing obs column."""
+        """project_specific 含 source_column + rules：映射已有 obs 列。"""
         adata = _make_synthetic_adata(n_cells=12)
         with tempfile.TemporaryDirectory() as tmpdir:
             h5ad_path = os.path.join(tmpdir, "test.h5ad")

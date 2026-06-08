@@ -6,10 +6,11 @@ A modular scRNA-seq integration analysis framework for cross-disease, multi-sour
 
 The framework's purpose is to enable PI and supervised students to produce publishable **biological findings** across disease projects (gastric precancerous lesions, RA, PCOS, VVC, ...). It is not a methods contribution — there is no software paper, no PyPI release, no plan to court external users. This framing is deliberate: it rules out the design pressure that comes with public-tool ambitions (broad API stability, exhaustive docs, generic extensibility).
 
-The framework's code surface is intentionally tiny — three Python functions that fill genuine gaps in `scanpy` / `anndata` / `scverse`, plus conventions for everything else:
+The framework's code surface is intentionally tiny — two Python functions that fill genuine gaps in `scanpy` / `anndata` / `scverse`, plus directly-callable scorer functions in `scrna_integration.scorers`, plus conventions for everything else:
 
 ```python
-from scrna_integration import read_with_manifest, sweep, load_markers
+from scrna_integration import read_with_manifest, load_markers
+from scrna_integration.scorers import integration_metrics  # called directly in for loops
 ```
 
 Anything else (run metadata, lineage, QC heterogeneity records, disease-ontology lookup, stage reports) is plain `adata.uns[...]` writes, plain `yaml.safe_load`, plain `sc.pl.*`, and notebook cells PI / students edit directly. There is **no `si.*` namespace tree**.
@@ -34,9 +35,9 @@ _Avoid_: Step (reserved for finer intra-stage operations like "run PCA"), Phase 
 A single invocation of a tunable method (e.g. one Harmony run, one scVI training). Multiple runs of the same step coexist in one h5ad as parallel `obsm` / `obs` slots, named by scanpy convention or PI's chosen suffix.
 _Avoid_: Trial, attempt, experiment.
 
-**Sweep**:
-A scripted set of method runs varying one or more parameters, with a scoring function, producing a comparison table and report. Implemented as the `sweep()` function in `scrna_integration.sweep`.
-_Avoid_: Grid search, parameter scan (acceptable as informal terms; sweep is canonical).
+**Scorers**:
+Directly-callable metric functions in `scrna_integration.scorers` (ADR-0009). For notebooks: `from scrna_integration.scorers import integration_metrics`. Called directly in explicit for loops — no callbacks. Replaces the removed `sweep()` function.
+_Avoid_: Sweep function, grid search helper.
 
 **Version** (of a stage h5ad):
 A re-run of a stage that produces a new h5ad file with bumped version suffix (`_v2`, `_v3`). Old versions are never overwritten — file-system convention only.
@@ -91,7 +92,7 @@ The natural-language judgement an LLM writes for one cluster during stage 6 cros
 _Avoid_: AI annotation, LLM call (too generic).
 
 **Sweep recommendations**:
-The auto-generated section at the end of a stage 6 report listing parameter sweeps the LLM judges worth running based on the single-run results (e.g. clusters with high uncertainty, methods with systematic disagreement). PI decides whether to act.
+The auto-generated section at the end of a stage 6 report listing parameter combinations the LLM judges worth running based on single-run results (e.g. clusters with high uncertainty, methods with systematic disagreement). PI decides whether to act. Note: named "sweep" as a workflow concept; the `sweep()` framework function was removed per ADR-0009.
 _Avoid_: Suggestions, hints.
 
 **Self-check**:
