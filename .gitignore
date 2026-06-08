@@ -62,7 +62,12 @@ tests/fixtures/
 # 分析中间产物
 results/data/
 results/figures/
+results/tables/
+results/_deseq2_tmp/
 *.tmp
+
+# scanpy 自动创建的 figures/ 目录（CWD root）
+figures/
 
 # === 敏感上下文（GitHub 仓库项目强制保留，禁止删除）===
 _memory.md
