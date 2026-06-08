@@ -67,12 +67,17 @@ cat(sprintf("[DESeq2] samples in contrast: %d (%s=%d, %s=%d)\n",
             denominator, sum(metadata[[factor_col]] == denominator)))
 
 # ---- DESeq2 ----
+# 整数性断言：防止上游误传 log-normalized 等非整数数据静默通过。
+# DESeq2 的 negative binomial 模型要求原始整数 counts；非整数输入
+# 会导致 p 值/logFC 全部不可靠。
+stopifnot(max(abs(counts - round(counts))) < 1e-6)
+
 # pseudobulk counts 已经是整数和的形式，DESeq2 直接用。
 # 注意: 不按常规加入 size factor 归一化——pseudobulk 的 library size 反映
 # 每个 (sample x cell-type) 组合中的细胞数差异，DESeq2 内部 median-of-ratios
 # 归一化已能处理。
 dds <- DESeqDataSetFromMatrix(
-  countData = round(counts),
+  countData = as.integer(round(counts)),
   colData   = metadata,
   design    = as.formula(paste0("~", factor_col))
 )
