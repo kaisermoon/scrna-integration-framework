@@ -39,6 +39,15 @@ def load_markers(
     典型用法:
         markers = load_markers("references/markers/gastric_epithelial.csv")
         # → {"SPEM": ["TFF2", "MUC6", ...], "pit_cell": ["MUC5AC", ...]}
+
+        # ⚠ 使用前必须检查基因存在性（不同数据集的 var_names 不同）
+        for ct, genes in markers.items():
+            present = [g for g in genes if g in adata.var_names]
+            missing = [g for g in genes if g not in adata.var_names]
+            if missing:
+                print(f"[{ct}] {len(missing)} markers not found: {missing}")
+            markers[ct] = present  # 只使用存在的基因
+
         sc.pl.dotplot(adata, var_names=markers, groupby="leiden")
     """
     df = pd.read_csv(csv_path)

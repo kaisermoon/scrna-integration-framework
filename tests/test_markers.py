@@ -58,3 +58,36 @@ class TestLoadMarkers:
         path = markers_csv
         r = load_markers(os.path.abspath(path))
         assert "SPEM" in r
+
+
+_EMPTY_TEMPLATE = "tissue,cell_type,marker,role,reference,notes\n"
+
+
+class TestLoadMarkersEmptyTemplate:
+    """load_markers() on header-only template CSVs must not crash.
+
+    Verifies that PI can safely load empty template CSVs (header-only,
+    no data rows) without errors. This is the expected starting state
+    before PI fills in real marker genes.
+    """
+
+    @pytest.fixture
+    def empty_csv(self, tmp_path):
+        p = tmp_path / "empty_template.csv"
+        p.write_text(_EMPTY_TEMPLATE)
+        return str(p)
+
+    def test_empty_template_flat_returns_empty_dict(self, empty_csv):
+        """Header-only template -> empty dict (no data rows to group)."""
+        r = load_markers(empty_csv)
+        assert r == {}
+
+    def test_empty_template_roles_none_returns_empty_dict(self, empty_csv):
+        """Three-layer mode on empty template -> empty dict."""
+        r = load_markers(empty_csv, roles=None)
+        assert r == {}
+
+    def test_empty_template_negative_returns_empty_dict(self, empty_csv):
+        """Negative-only filter on empty template -> empty dict."""
+        r = load_markers(empty_csv, roles=("negative",))
+        assert r == {}
