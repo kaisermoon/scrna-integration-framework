@@ -1,4 +1,4 @@
-"""Tests for load_markers() — synthetic CSV, no real data files."""
+"""Tests for load_markers() -- synthetic CSV, no real data files."""
 
 import os
 
@@ -8,12 +8,12 @@ from scrna_integration.markers import load_markers
 
 _SAMPLE = (
     "tissue,cell_type,marker,role,reference,notes\n"
-    "gastric,SPEM,TFF2,canonical,Goldenring 2017,core\n"
-    "gastric,SPEM,MUC6,canonical,Goldenring 2017,\n"
-    "gastric,SPEM,CD44,optional,Ref 2020,\n"
-    "gastric,pit_cell,MUC5AC,canonical,Nowicki 2023,\n"
-    "gastric,pit_cell,TFF1,canonical,Nowicki 2023,\n"
-    "gastric,pit_cell,CD44v9,negative,Ref 2021,exclude\n"
+    "tissue_A,cell_type_1,GENE_A,canonical,Author YEAR,core\n"
+    "tissue_A,cell_type_1,GENE_B,canonical,Author YEAR,\n"
+    "tissue_A,cell_type_1,GENE_E,optional,Author YEAR,\n"
+    "tissue_A,cell_type_2,GENE_C,canonical,Author YEAR,\n"
+    "tissue_A,cell_type_2,GENE_D,canonical,Author YEAR,\n"
+    "tissue_A,cell_type_2,GENE_F,negative,Author YEAR,exclude\n"
 )
 
 
@@ -28,33 +28,66 @@ class TestLoadMarkers:
     def test_default_canonical_optional(self, markers_csv):
         path = markers_csv
         r = load_markers(path)
-        assert "SPEM" in r
-        assert "pit_cell" in r
-        assert "TFF2" in r["SPEM"]
-        assert "MUC6" in r["SPEM"]
-        assert "CD44" in r["SPEM"]
-        assert "MUC5AC" in r["pit_cell"]
-        assert "TFF1" in r["pit_cell"]
+        assert "cell_type_1" in r
+        assert "cell_type_2" in r
+        assert "GENE_A" in r["cell_type_1"]
+        assert "GENE_B" in r["cell_type_1"]
+        assert "GENE_E" in r["cell_type_1"]
+        assert "GENE_C" in r["cell_type_2"]
+        assert "GENE_D" in r["cell_type_2"]
         # negative markers excluded by default
-        assert "CD44v9" not in r["pit_cell"]
+        assert "GENE_F" not in r["cell_type_2"]
 
     def test_negative_only(self, markers_csv):
         path = markers_csv
         r = load_markers(path, roles=("negative",))
-        assert r["pit_cell"] == ["CD44v9"]
-        assert "SPEM" not in r  # no negative markers for SPEM
+        assert r["cell_type_2"] == ["GENE_F"]
+        assert "cell_type_1" not in r  # no negative markers for cell_type_1
 
     def test_roles_none_three_layer(self, markers_csv):
         path = markers_csv
         r = load_markers(path, roles=None)
-        assert r["SPEM"]["canonical"] == ["TFF2", "MUC6"]
-        assert r["SPEM"]["optional"] == ["CD44"]
-        assert r["SPEM"]["negative"] == []
-        assert r["pit_cell"]["canonical"] == ["MUC5AC", "TFF1"]
-        assert r["pit_cell"]["negative"] == ["CD44v9"]
-        assert r["pit_cell"]["optional"] == []
+        assert r["cell_type_1"]["canonical"] == ["GENE_A", "GENE_B"]
+        assert r["cell_type_1"]["optional"] == ["GENE_E"]
+        assert r["cell_type_1"]["negative"] == []
+        assert r["cell_type_2"]["canonical"] == ["GENE_C", "GENE_D"]
+        assert r["cell_type_2"]["negative"] == ["GENE_F"]
+        assert r["cell_type_2"]["optional"] == []
 
     def test_accepts_absolute_path(self, markers_csv):
         path = markers_csv
         r = load_markers(os.path.abspath(path))
-        assert "SPEM" in r
+        assert "cell_type_1" in r
+
+
+_EMPTY_TEMPLATE = "tissue,cell_type,marker,role,reference,notes\n"
+
+
+class TestLoadMarkersEmptyTemplate:
+    """load_markers() on header-only template CSVs must not crash.
+
+    Verifies that PI can safely load empty template CSVs (header-only,
+    no data rows) without errors. This is the expected starting state
+    before PI fills in real marker genes.
+    """
+
+    @pytest.fixture
+    def empty_csv(self, tmp_path):
+        p = tmp_path / "empty_template.csv"
+        p.write_text(_EMPTY_TEMPLATE)
+        return str(p)
+
+    def test_empty_template_flat_returns_empty_dict(self, empty_csv):
+        """Header-only template -> empty dict (no data rows to group)."""
+        r = load_markers(empty_csv)
+        assert r == {}
+
+    def test_empty_template_roles_none_returns_empty_dict(self, empty_csv):
+        """Three-layer mode on empty template -> empty dict."""
+        r = load_markers(empty_csv, roles=None)
+        assert r == {}
+
+    def test_empty_template_negative_returns_empty_dict(self, empty_csv):
+        """Negative-only filter on empty template -> empty dict."""
+        r = load_markers(empty_csv, roles=("negative",))
+        assert r == {}

@@ -39,9 +39,30 @@ def load_markers(
     典型用法:
         markers = load_markers("references/markers/gastric_epithelial.csv")
         # → {"SPEM": ["TFF2", "MUC6", ...], "pit_cell": ["MUC5AC", ...]}
+
+        # ⚠ 使用前必须检查基因存在性（不同数据集的 var_names 不同）
+        for ct, genes in markers.items():
+            present = [g for g in genes if g in adata.var_names]
+            missing = [g for g in genes if g not in adata.var_names]
+            if missing:
+                print(f"[{ct}] {len(missing)} markers not found: {missing}")
+            markers[ct] = present  # 只使用存在的基因
+
         sc.pl.dotplot(adata, var_names=markers, groupby="leiden")
     """
     df = pd.read_csv(csv_path)
+
+    # 列名校验（PI 手填 CSV 时容易打错列名，缺列时 pd 会抛 KeyError
+    # 对非计算机专业用户不友好，这里前置校验并给出中文报错）
+    _required = ["cell_type", "marker", "role"]
+    _missing = [col for col in _required if col not in df.columns]
+    if _missing:
+        raise ValueError(
+            f"marker CSV 缺少必需列: {', '.join(_missing)}；"
+            f"需要的列: {', '.join(_required)}。"
+            f"当前文件列: {', '.join(df.columns.tolist())}。"
+            f"请检查 CSV 列名是否与模板一致（区分大小写）。"
+        )
 
     if roles is None:
         # 完整三层模式：{cell_type: {canonical: [...], optional: [...], negative: [...]}}
