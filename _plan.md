@@ -43,9 +43,9 @@ PR 计划重排：老 PR-3 拆为 PR-3a/3b/3c（主线到注释）+ PR-4（第�
 
 | # | PR | 范围 | 大小 | 状态 | 验收 |
 |---|------|------|------|------|------|
-| 1 | PR-0a | pyproject 依赖（scanpy / anndata / scvi-tools / harmonypy / scrublet / **infercnvpy** / **cellrank**（CytoTRACE）/ **decoupler**（pseudobulk）/ rpy2 / anndata2ri / openrouter SDK / mLLMCelltype / mygene / **sccoda** 等）+ environment.yml + environment-r.yml（含 SoupX / DESeq2 / Monocle3 / UCell / hdWGCNA 等 R 包，按 stage 分组可选装） | ≤10/400 | pending | smoke test 通过 + 双环境可装 |
-| 2 | PR-1 | `src/scrna_integration/io.py`：`read_with_manifest()` 完整实现（10x_mtx + h5ad + RDS via rpy2 + obs_mapping + value_mapping + clinical_metadata join + original_annotations 重命名 + 基因 ID 双向同步 + species 校验 + raw matrix 路径记录 + preprocessing_done/qc_overrides schema 校验）+ 5 个 GCPL manifests（指向夹具 A，最小必填优先）+ 最小 gastric ontology（5-10 节点） | 申请 size 例外 | blocked PR-0a + PR-0b | **夹具 A 5 数据集 stage 1 端到端跑通** + 每个 dataset 出一个 stage1_loaded_v1.h5ad，含 `var["ensembl_id"]` + `adata.uns["species"]` + `adata.uns["raw_matrix_path"]`（如有） |
-| 3 | PR-2 | `src/scrna_integration/sweep.py`：`sweep()` 完整实现 + `src/scrna_integration/scorers.py`：常用 scorer（QC 平衡、`integration_metrics` scIB suite、silhouette + ARI clustering_metrics、annotation concordance）+ `src/scrna_integration/markers.py`：`load_markers()`（按 ADR-0005）+ `__init__.py` re-export 三函数 | ≤10/400 | blocked PR-1 | unit test：sweep wrap 任意 scanpy/scvi 函数；load_markers 三种 role 模式；integration_metrics 在合成数据上输出合理 |
+| 1 | PR-0a | pyproject 依赖（scanpy / anndata / scvi-tools / harmonypy / scrublet / **infercnvpy** / **cellrank**（CytoTRACE）/ **decoupler**（pseudobulk）/ rpy2 / anndata2ri / openrouter SDK / mLLMCelltype / mygene / **sccoda** 等）+ environment.yml + environment-r.yml（含 SoupX / DESeq2 / Monocle3 / UCell / hdWGCNA 等 R 包，按 stage 分组可选装） | ≤10/400 | **done (PR #3, 8a5ba21)** | smoke test 通过 + 双环境可装 |
+| 2 | PR-1 | `src/scrna_integration/io.py`：`read_with_manifest()` 完整实现（10x_mtx + h5ad + RDS via rpy2 + obs_mapping + value_mapping + clinical_metadata join + original_annotations 重命名 + 基因 ID 双向同步 + species 校验 + raw matrix 路径记录 + preprocessing_done/qc_overrides schema 校验）+ 5 个 GCPL manifests（指向夹具 A，最小必填优先）+ 最小 gastric ontology（5-10 节点） | 申请 size 例外 | blocked PR-0a + PR-0b | **夹具 A 5 数据集 stage 1 端到端跑通** + 每个 dataset 出一个 stage1_loaded_v1.h5ad，含 `var["ensembl_id"]` + `adata.uns["species"]` + `adata.uns["raw_matrix_path"]`（如有） — **done (PR #6, c1d84d9); 4 源端到端(Tsubosaka 待 R), 64+测试, ontology 移入 references/** |
+| 3 | PR-2 | `src/scrna_integration/sweep.py`：`sweep()` 完整实现 + `src/scrna_integration/scorers.py`：常用 scorer（QC 平衡、`integration_metrics` scIB suite、silhouette + ARI clustering_metrics、annotation concordance）+ `src/scrna_integration/markers.py`：`load_markers()`（按 ADR-0005）+ `__init__.py` re-export 三函数 | size 例外(632,自决批) | **done (PR #4, d16a63d)** | unit test：sweep wrap 任意 scanpy/scvi 函数；load_markers 三种 role 模式；integration_metrics 在合成数据上输出合理 |
 
 ### 测试夹具准备（PR-0b，PR-0a 之后、PR-1 之前）
 
@@ -53,21 +53,22 @@ PR 计划重排：老 PR-3 拆为 PR-3a/3b/3c（主线到注释）+ PR-4（第�
 
 | # | PR | 范围 | 大小 | 状态 | 验收 |
 |---|------|------|------|------|------|
-| 3.5 | PR-0b | `scripts/make_test_subset.py`：从 `~/Works/GCPL_scRNA/`（只读）抽两套夹具到本地 `data/_subset/`（gitignore）：<br/>**夹具 A（原始异构，测 stage1-2）**：保留各源原格式——Kim 10x h5（~1500，覆盖 na/Incom/Com/CN/SI）/ Nancang 10x mtx filtered+raw（~2000，GC/GS/IM 各 2-3 样本，raw 供 SoupX）/ Tsubosaka RDS（~2000，按 major_clusters×subtype）/ Nowicki h5ad（~2500，按 Celltypes_global 27类×Patient_status 4组，主要类型≥50）/ Yue txt.gz counts（~1000，覆盖 IM/BO/AO）；合计 ~9000<br/>**夹具 B（下游，测 stage3+）**：从 `results/data_objects/02_qc_filtered_data.h5ad`(6.9G) 按疾病组抽 ~5-8k，不带细胞类型<br/>RDS 抽样段用 subprocess Rscript（ADR-0007）；脚本可复现、可调比例 | ≤10/400 | blocked PR-0a | 脚本跑通产出夹具 A 5 文件（原格式保留）+ 夹具 B 1 文件；总细胞数落在 5-10k（A）/ 5-8k（B）；细胞类型代表性由 Nowicki+Tsubosaka 作者注释承担；数据全部本地、不进 git |
+| 3.5 | PR-0b | `scripts/make_test_subset.py`：从 `~/Works/GCPL_scRNA/`（只读）抽两套夹具到本地 `data/_subset/`（gitignore）：<br/>**夹具 A（原始异构，测 stage1-2）**：保留各源原格式——Kim 10x h5（~1500，覆盖 na/Incom/Com/CN/SI）/ Nancang 10x mtx filtered+raw（~2000，GC/GS/IM 各 2-3 样本，raw 供 SoupX）/ Tsubosaka RDS（~2000，按 major_clusters×subtype）/ Nowicki h5ad（~2500，按 Celltypes_global 27类×Patient_status 4组，主要类型≥50）/ Yue txt.gz counts（~1000，覆盖 IM/BO/AO）；合计 ~9000<br/>**夹具 B（下游，测 stage3+）**：从 `results/data_objects/02_qc_filtered_data.h5ad`(6.9G) 按疾病组抽 ~5-8k，不带细胞类型<br/>RDS 抽样段用 subprocess Rscript（ADR-0007）；脚本可复现、可调比例 | size 例外(606,自决批) | **done (PR #5, 8c65b21); 5/6 源(Tsubosaka 待 R)** | 脚本跑通产出夹具 A 5 文件（原格式保留）+ 夹具 B 1 文件；总细胞数落在 5-10k（A）/ 5-8k（B）；细胞类型代表性由 Nowicki+Tsubosaka 作者注释承担；数据全部本地、不进 git |
 
 ### 第二阶段：主线 notebook 跑到注释（PR-3a → PR-3c）
 
 | # | PR | 范围 | 大小 | 状态 | 验收 |
 |---|------|------|------|------|------|
-| 4 | PR-3a | 主线前段 notebook：`stage1_loaded` / `stage2_qcd`（manifest 驱动 QC skip + scrublet + SoupX rpy2 按需读 raw matrix）/ `stage3_normalized`。每个含 PARAMS cell + scanpy 原生 + 内存纪律 idiom + self-check + 结尾 del/gc | ≤10/400 | blocked PR-2 | **GCPL 5 数据集端到端跑通 stage 1→3**，出 stage3_normalized_v1.h5ad |
-| 5 | PR-3b | 主线中段 notebook：`stage4_embedded`（多 embedding 平级 + UMAP 三上色目测 + sweep integration_metrics）/ `stage5_clustered`（多分辨率 Leiden + sweep + 聚类扩展槽）| ≤10/400 | blocked PR-3a | **跑通 stage 4→5**，≥1 次 stage4 重跑触发 v2 + `adata.uns["status"]="promoted"`；UMAP 多 embedding 对比图产出 |
-| 6 | PR-3c | 注释段 notebook：`stage6_annotated`（4 默认注释 + scANVI 有图谱时 + CellTypist 注释 cell + cross-method comparison + LLM verdict）/ `stage6_per_cluster` / `stage6_5_subset` | 申请 size 例外 | blocked PR-3b + PI revoke/新建 OpenRouter key | **跑通 stage 6 + 6.5**，出 cell_type_final_v1 + 每簇 LLM verdict markdown |
+| 4 | PR-3a | 主线前段 notebook：`stage1_loaded` / `stage2_qcd`（manifest 驱动 QC skip + scrublet + SoupX rpy2 按需读 raw matrix）/ `stage3_normalized`。每个含 PARAMS cell + scanpy 原生 + 内存纪律 idiom + self-check + 结尾 del/gc | ≤10/400 | blocked PR-2 | **GCPL 5 数据集端到端跑通 stage 1→3**，出 stage3_normalized_v1.h5ad — **done (PR #7, 2dd489e); Nancang 端到端 stage1→3 跑通, SoupX 待 R 优雅守卫** |
+| 5 | PR-3b | 主线中段 notebook：`stage4_embedded`（多 embedding 平级 + UMAP 三上色目测 + sweep integration_metrics）/ `stage5_clustered`（多分辨率 Leiden + sweep + 聚类扩展槽）| ≤10/400 | blocked PR-3a | **跑通 stage 4→5**，≥1 次 stage4 重跑触发 v2 + `adata.uns["status"]="promoted"`；UMAP 多 embedding 对比图产出 — **done (PR #8, 2695a40); Nancang 端到端 stage4→5, scVI 训练, sweep 报告, igraph 依赖补声明** |
+| 6 | PR-3c | 注释段 notebook：`stage6_annotated`（4 默认注释 + scANVI 有图谱时 + CellTypist 注释 cell + cross-method comparison + LLM verdict）；per_cluster+6.5_subset 拆到 PR-3d | 申请 size 例外 | **stage6_annotated done (PR #10, 7e3601f)**; 非 LLM 部分代码完整待 PI jupyter 执行验证; mLLMCelltype 共识+verdict 写代码未测试待 PI 配 .env key 人工调 |
+| 6.5 | PR-3d | 注释段补完 notebook：`stage6_per_cluster.ipynb`（普通 for-loop 逐簇深度报告 + 每簇 LLM verdict；ADR-0003 无 plugin）/ `stage6_5_subset.ipynb`（亚群 subset 重分析：按 `cell_type_final_v1` 取子集 → 重跑 HVG/embedding/clustering/注释，版本化输出） | ≤10/400 | **done (PR #11)**；3 minor（虚假验证→真 assert / Anthropic 路由对齐 / .values→index 对齐）修复后 reviewer approve | 静态构建 + 清 output；读 stage6_annotated 输出契约 `cell_type_final_v1`；运行验证交 PI |
 
 ### 第三阶段：GCPL 第一波生物学结果（PR-4）
 
 | # | PR | 范围 | 大小 | 状态 | 验收 |
 |---|------|------|------|------|------|
-| 7 | PR-4 | stage 7 核心 3 模块：`stage7/deg.ipynb`（rank_genes_groups）/ `stage7/pseudobulk_deg.ipynb`（decoupler + DESeq2 subprocess）/ `stage7/cnv.ipynb`（infercnvpy 纯 Python，参考 student `4.2`/`4.3` 重写） | ≤10/400 | blocked PR-3c | **出至少一项可看生物学结果**：CAG→IM 跨阶段 DEG list / 区分肿瘤 vs 正常 CNV 图 |
+| 7 | PR-4 | stage 7 核心 3 模块：`stage7/deg.ipynb`（rank_genes_groups）/ `stage7/pseudobulk_deg.ipynb`（decoupler + DESeq2 subprocess）/ `stage7/cnv.ipynb`（infercnvpy 纯 Python，参考 student `4.2`/`4.3` 重写） | size 例外(~1315,reviewer 认可) | **reviewer approve + CI 绿，待 PI 拍板合并**（PR #12，commit 5a2b3bf；升级点：第一波生物学结果要 PI 亲眼看）；Critical 已修（pseudobulk 改用 stage3 `layer="counts"` 原始整数 counts，reviewer 实地核实上游契约） | **出至少一项可看生物学结果**：CAG→IM 跨阶段 DEG list / 区分肿瘤 vs 正常 CNV 图 |
 
 ### 第四阶段：marker 库 + 文档（PR-5）
 
