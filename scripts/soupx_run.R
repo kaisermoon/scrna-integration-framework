@@ -164,8 +164,8 @@ if (!is.null(clusters) && length(clusters) > 0) {
 # SoupX 在某些数据上（基因极稀疏、大量全零基因）会因 soupProf$est 产生
 # NaN 而报错 "missing values and NaN's not allowed"。渐进式回退策略：
 #   1. 默认参数
-#   2. 降低 tfidfMin + soupQuantile（放宽标记基因筛选门槛）
-#   3. forceAccept=TRUE（跳过自动判断，直接使用 priorRho 作为污染估计）
+#   2. 降低 tfidfMin（SoupX vignette 推荐放宽值）+ soupQuantile（放宽标记基因筛选门槛）
+#   3. forceAccept=TRUE, priorRho=0.05（10x 数据典型污染比例经验值，跳过自动判断直接用 priorRho）
 cat("[SoupX] running autoEstCont (estimating contamination fraction)...\n")
 sc <- tryCatch({
   autoEstCont(sc)
