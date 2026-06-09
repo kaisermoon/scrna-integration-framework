@@ -64,6 +64,7 @@ results/data/
 results/figures/
 results/tables/
 results/_deseq2_tmp/
+results/_hdWGCNA_tmp/
 *.tmp
 
 # scanpy 自动创建的 figures/ 目录（CWD root）
