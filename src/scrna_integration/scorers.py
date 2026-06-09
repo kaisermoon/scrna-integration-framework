@@ -105,10 +105,12 @@ def integration_metrics(
     adata: AnnData,
     batch_key: str = "batch",
     label_key: str | None = None,
+    embed_key: str | None = None,
 ) -> dict[str, float]:
     """批次整合指标：按批次和细胞类型计算轮廓系数，评估批次混合与生物学信号保留。
 
-    自动检测 obsm 中的嵌入（优先 X_pca_harmony/X_scVI/X_scANVI，回退到任意 X_* 键）。
+    当 *embed_key* 显式给出时直接使用该嵌入；否则自动检测 obsm 中的嵌入
+    （优先 X_pca_harmony/X_scVI/X_scANVI，回退到任意 X_* 键）。
 
     ``scib-metrics`` 可选——未安装时仅计算 sklearn 子集并将 ``scib_available`` 设为 0.0。
 
@@ -116,6 +118,7 @@ def integration_metrics(
         adata: 含 obsm 嵌入和 obs 批次/标签列的 AnnData
         batch_key: obs 批次列名（默认 "batch"）
         label_key: obs 细胞类型列名（None 则自动检测 cell_type/cell_type_final_v1）
+        embed_key: 嵌入 obsm 键名（None 则按优先级自动检测）
 
     Returns:
         silhouette_batch（越低=批次混合越好）/
@@ -128,19 +131,23 @@ def integration_metrics(
     if batch_col is None:
         return {"_note": float("nan")}
 
-    # 定位嵌入（优先整合输出，回退 PCA）
-    embed_key = _first_match(
-        list(adata.obsm.keys()),
-        ["X_pca_harmony", "X_scVI", "X_scANVI", "X_pca"],
-    )
-    if embed_key is None:
-        # 回退：任意 X_ 开头的 obsm 键
-        for k in adata.obsm.keys():
-            if k.startswith("X_"):
-                embed_key = k
-                break
-    if embed_key is None:
-        return {"_note": float("nan")}
+    # 定位嵌入：优先使用显式给定的 embed_key，否则自动检测
+    if embed_key is not None:
+        if embed_key not in adata.obsm:
+            return {"_note": float("nan")}
+    else:
+        embed_key = _first_match(
+            list(adata.obsm.keys()),
+            ["X_pca_harmony", "X_scVI", "X_scANVI", "X_pca"],
+        )
+        if embed_key is None:
+            # 回退：任意 X_ 开头的 obsm 键
+            for k in adata.obsm.keys():
+                if k.startswith("X_"):
+                    embed_key = k
+                    break
+        if embed_key is None:
+            return {"_note": float("nan")}
 
     x_embed = adata.obsm[embed_key]  # noqa: N806
 
