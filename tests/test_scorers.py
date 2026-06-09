@@ -145,6 +145,39 @@ class TestIntegrationMetrics:
         r = integration_metrics(adata, label_key="custom_ct")
         assert "silhouette_celltype" in r
 
+    def test_explicit_embed_key(self):
+        """显式 embed_key 真生效——两个不同嵌入产生不同 silhouette_batch，证明未走 auto-detect。"""
+        rng = np.random.default_rng(99)
+        n_cells = 200
+        # 嵌入 A：两个批次结构良好分离 → 低 batch silhouette（批次混合好）
+        # 嵌入 B：纯随机 → 批次 score 接近 0
+        embed_a = rng.normal(size=(n_cells, 10)).astype(np.float32)
+        embed_a[:100] += 5.0  # 前半细胞偏移，形成明显分离
+        embed_b = rng.normal(0, 0.1, size=(n_cells, 10)).astype(np.float32)
+
+        adata = anndata.AnnData(rng.poisson(2, size=(n_cells, 20)).astype(np.float32))
+        adata.obsm["X_pca"] = embed_a
+        adata.obsm["X_alt"] = embed_b
+        adata.obs["batch"] = ["A"] * 100 + ["B"] * 100
+
+        r_a = integration_metrics(adata, embed_key="X_pca")
+        r_b = integration_metrics(adata, embed_key="X_alt")
+
+        assert "silhouette_batch" in r_a
+        assert "silhouette_batch" in r_b
+        assert abs(r_a["silhouette_batch"] - r_b["silhouette_batch"]) > 0.05, (
+            f"两个不同嵌入产生近乎相同的 silhouette_batch "
+            f"(X_pca={r_a['silhouette_batch']:.4f}, X_alt={r_b['silhouette_batch']:.4f})"
+        )
+
+    def test_explicit_embed_key_not_found(self):
+        """embed_key 不存在于 obsm 时 graceful 返回 _note。"""
+        adata = _make_adata(200)
+        adata.obs["batch"] = ["A"] * 100 + ["B"] * 100
+        r = integration_metrics(adata, embed_key="not_found")
+        assert "_note" in r
+        assert np.isnan(r["_note"])
+
 
 class TestAnnotationConcordance:
     """标注一致性：Cohen's kappa。"""
