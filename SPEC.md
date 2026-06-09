@@ -474,46 +474,54 @@ qc_overrides:
 
 ---
 
-## R Bridge: split by tool
+## R Bridge: subprocess Rscript for all R tools
 
-R interoperability is unavoidable, but the mechanism is chosen **per tool** — see ADR-0007. There is no single canonical path and no `_r_bridge` framework module. Three cases:
+R interoperability is unavoidable, but the mechanism is unified: **all R tools use subprocess `Rscript` + temp files**. See ADR-0007 (revised 2026-06-09). There is no rpy2 dependency in the pipeline. Three cases:
 
 1. **Pure Python, no R** — InferCNV (`infercnvpy`: `cnv.tl.infercnv` / `cnv.tl.cnv_score`) and CytoTRACE (`cellrank` `CytoTRACEKernel`). These have mature Python packages validated in `student-code`; do not reach for R.
-2. **rpy2 `%%R` in-notebook** — SoupX at stage 2. Per-sample matrices are small and conversion is stable; keeps QC coherent inside one notebook. Same style as `legacy-GCPL/02_quality_control.ipynb`.
-3. **subprocess `Rscript` + temp files** — Monocle3, UCell, DESeq2, hdWGCNA, and other heavy / R-only tools. Write `.mtx`/`.csv`, call `subprocess.run(["Rscript", "--vanilla", ...])`, read results back. This is the **primary** path for heavy R tools because rpy2 + anndata2ri is brittle on large-object conversion and breaks on dependency upgrades; the students' working downstream code uses subprocess throughout.
+2. **subprocess `Rscript` + temp files** — SoupX, Monocle3, UCell, DESeq2, hdWGCNA, and all other R tools. Write `.mtx`/`.csv`, call `subprocess.run(["Rscript", "--vanilla", ...])`, read results back. Process isolation is robust; each `.R` script is independently debuggable; this is the pattern `student-code` actually uses throughout.
+3. **rpy2 `%%R` in-notebook** — **Removed (2026-06-09)**. Formerly used for SoupX at stage 2. rpy2 + anndata2ri was infeasible in conda R 4.4.3 (`R_getVar` symbol missing); PI decision B moved SoupX to subprocess Rscript, unifying all R tools under one bridge mechanism.
 
-The only framework-side R concession is that `read_with_manifest` handles `format: "rds"` internally (otherwise every IO call site needs rpy2 ceremony just to read a Seurat object). All other R access follows the split above, written directly in notebooks.
+The only framework-side R concession is that `read_with_manifest` handles `format: "rds"` internally (otherwise every IO call site needs rpy2 ceremony just to read a Seurat object). All other R access follows the subprocess pattern above, written directly in notebooks.
 
-### rpy2 idiom — SoupX (stage 2, small in-notebook exchange)
+### SoupX subprocess pattern (stage 2 ambient correction)
 
-Three lines at the top of the QC notebook:
-
-```python
-%load_ext rpy2.ipython
-import anndata2ri
-anndata2ri.set_ipython_converter()
-from rpy2.robjects.packages import importr
-```
-
-After these, `%R` and `%%R` cells work and AnnData ↔ SingleCellExperiment conversion happens transparently in `localconverter` blocks.
-
-### Concrete example — SoupX (stage 2 ambient correction)
+See `scripts/soupx_run.R` for the standalone R script. The notebook pattern:
 
 ```python
-# Cell A: load the SoupX library and read raw matrix on demand
-importr('SoupX')
-adata_raw = sc.read_10x_mtx(adata.uns["raw_matrix_path"])   # not loaded at stage 1; loaded here
-
-# Cell B: run SoupX per sample (R cell — define and call the R function)
-%%R -i counts_matrix -i raw_counts_matrix -i cluster_labels -o corrected_counts_matrix
-library(SoupX)
-sc <- SoupChannel(raw_counts_matrix, counts_matrix)
-sc <- setClusters(sc, cluster_labels)
-sc <- autoEstCont(sc)
-corrected_counts_matrix <- adjustCounts(sc)
+# Cell A: export filtered counts per sample (10x mtx format), extract original barcodes
+# Cell B: call the independent R script
+import subprocess
+subprocess.run(["Rscript", "--vanilla", "scripts/soupx_run.R",
+                work_dir, filtered_export_dir, raw_mtx_dir, sample_id], check=True)
+# Cell C: read corrected counts back, update adata.X
 ```
 
-PI loops over samples in Python, passes each sample's matrices in via `-i`, gets corrected counts back via `-o`. Same pattern as `legacy-GCPL/02_quality_control.ipynb`.
+The `.R` script (`SoupChannel` → `autoEstCont` → `adjustCounts` → write corrected `.mtx`) is a standalone file in `scripts/`, independently runnable and debuggable outside the notebook.
+
+### Concrete example — SoupX (stage 2 ambient correction, subprocess Rscript)
+
+```python
+# Cell A: R 环境守卫——检查 Rscript 可执行 + SoupX R 包可加载
+import shutil, subprocess
+_rscript = shutil.which(RSCRIPT_BIN)
+_check = subprocess.run([_rscript, "--vanilla", "-e",
+    'suppressPackageStartupMessages(library(SoupX)); cat("OK")'],
+    capture_output=True, text=True, timeout=30)
+r_available = _check.returncode == 0 and "OK" in _check.stdout
+
+# Cell B: 对每个有 raw matrix 的样本导出过滤后计数，subprocess 调 Rscript
+#   1. 提取原始 10x barcode（从 cell_id 前缀中剥离）
+#   2. 导出过滤后矩阵（matrix.mtx + barcodes.tsv + features.tsv）到临时目录
+#   3. subprocess.run([RSCRIPT_BIN, "--vanilla", "scripts/soupx_run.R", work, filt, raw, sid])
+#   4. 读回 corrected_counts.mtx，写回 adata.X
+
+# Cell C: 读回并写回
+import scipy.io
+corrected = scipy.io.mmread("results/_soupx_tmp/{sample}/corrected_counts.mtx")
+adata[cell_ids].X = sp.csr_matrix(corrected.T)
+adata.obs.loc[cell_ids, "ambient_correction_applied"] = True
+```
 
 ### Concrete example — Monocle3 (stage 7 pseudotime, subprocess Rscript)
 
@@ -565,20 +573,16 @@ The `.R` script wraps `DESeqDataSetFromMatrix` → `DESeq` → `results(contrast
 
 ### Conventions for R cells
 
-**rpy2 (SoupX only):**
-- **Always wrap conversion in `localconverter`** — anndata2ri's converter is not always active by default; the explicit context manager prevents surprise type errors.
-- **Use `%%R -i input1 -i input2 -o output`** to declare exactly which Python variables enter and leave the R cell. No implicit globals across the language boundary.
-- **Never `library(...)` inside a hot loop** — `importr(...)` once at the top.
-
-**subprocess (heavy R tools):**
-- **The `.R` script lives in `scripts/`**, takes a working-directory path (and any contrast args) on the command line, and is independently runnable — debug it with `Rscript --vanilla scripts/foo.R results/_tmp` outside Jupyter.
+**subprocess (all R tools):**
+- **The `.R` script lives in `scripts/`**, takes a working-directory path (and any tool-specific args) on the command line, and is independently runnable — debug it with `Rscript --vanilla scripts/foo.R results/_tmp` outside Jupyter.
 - **Always pass `check=True`** to `subprocess.run` so a failing R script raises in Python instead of silently continuing.
 - **Read R-produced figures back into the notebook** (`IPython.display.Image`) so results stay visible in the notebook even though computation happened out of process.
 - **Temp dirs go under `results/_<tool>_tmp/`** (gitignored) and are cleaned at the end of the cell when large.
+- **RSCRIPT_BIN convention**: each notebook PARAMS cell declares the Rscript path (e.g. `RSCRIPT_BIN = "/Users/zhongzishao/miniforge3/envs/scrna-integration-r/bin/Rscript"`). Same convention across all R-using stages.
 
-### When rpy2 conversion breaks
+### rpy2: removed from the pipeline
 
-If SoupX's rpy2 path fails after a numpy/scipy/anndata upgrade, fall back to the subprocess pattern for SoupX too (export per-sample matrices, call an `.R` script). This is the per-incident workaround for the one rpy2 site; the heavy-R tools are already on subprocess by default.
+rpy2 was formerly used only for SoupX at stage 2. The 2026-06-09 ADR-0007 revision reclassified SoupX to subprocess Rscript after rpy2 + anndata2ri proved infeasible in conda R 4.4.3 (`R_getVar` symbol missing). The rpy2 dependency is no longer needed for any stage. `read_with_manifest` retains rpy2 internally for `format: "rds"` (Seurat object reading), but this is the only remaining rpy2 call site in the codebase.
 
 ### Environment management
 
@@ -856,7 +860,7 @@ The `notebooks/` directory contains **directly runnable notebooks**, not templat
 ```
 notebooks/
 ├── stage1_loaded.ipynb              # PARAMS cell + read_with_manifest + write h5ad
-├── stage2_qcd.ipynb                 # QC with manifest-driven skip logic + scrublet + SoupX (rpy2)
+├── stage2_qcd.ipynb                 # QC with manifest-driven skip logic + scrublet + SoupX (subprocess Rscript)
 ├── stage3_normalized.ipynb          # normalize + log + HVG
 ├── stage4_embedded.ipynb            # PCA + Harmony + scVI + scANVI + sweep with integration_metrics
 ├── stage5_clustered.ipynb           # multi-resolution Leiden + sweep
@@ -865,8 +869,8 @@ notebooks/
 ├── stage6_5_subset.ipynb            # subset re-cluster (T cells / epithelial / etc.)
 └── stage7/                          # downstream modules; each consumes stage 6 (or 6.5) output
     ├── deg.ipynb                    # PR-3 — sc.tl.rank_genes_groups
-    ├── pseudobulk_deg.ipynb         # PR-3 — DESeq2 (rpy2)
-    ├── cnv.ipynb                    # PR-3 — InferCNV (rpy2)
+    ├── pseudobulk_deg.ipynb         # PR-3 — DESeq2 (subprocess Rscript)
+    ├── cnv.ipynb                    # PR-3 — InferCNV (pure Python infercnvpy)
     ├── pathway.ipynb                # PR-4+
     ├── pseudotime.ipynb             # PR-4+
     ├── grn.ipynb                    # PR-4+
@@ -880,7 +884,7 @@ notebooks/
 Every notebook follows the same structural template (not a code template — a structural pattern):
 
 1. **PARAMS cell** at the top (`# === PARAMS ===` markdown header + Python cell with assignments).
-2. **Imports cell** (scanpy / framework imports / rpy2 if needed).
+2. **Imports cell** (scanpy / framework imports / subprocess + shutil if R tools used).
 3. **Load upstream h5ad** (or call `read_with_manifest` for stage 1).
 4. **Stage logic cells** — scanpy native APIs.
 5. **Run-metadata cells** — `adata.uns[...] = {...}` writes documenting what was done.
@@ -911,8 +915,8 @@ The cell sequences below are the **specification** PR-3 coder agents implement a
 
 ```
 [md]   # Stage 2: QC + filter + doublet (scrublet) + ambient (SoupX, conditional)
-[code] # === PARAMS === UPSTREAM_PATH, OUTPUT_PATH, manifest path lookup
-[code] # imports (scanpy + rpy2 if any source uses SoupX)
+[code] # === PARAMS === UPSTREAM_PATH, OUTPUT_PATH, QC thresholds, RSCRIPT_BIN, SOUPX_RSCRIPT
+[code] # imports (scanpy + subprocess/shutil/tempfile for SoupX subprocess Rscript)
 [code] # load adata + load manifest dict (for preprocessing_done / qc_overrides)
 [md]   ## QC visualisation pre-filter
 [code] # violins / scatters of n_genes / pct_mt / total_counts per source_dataset
@@ -921,12 +925,16 @@ The cell sequences below are the **specification** PR-3 coder agents implement a
        #     fill obs.doublet_score = NaN, predicted_doublet = False, log skip reason
        # else:
        #     sc.external.pp.scrublet(adata_per_source); fold back into main adata
-[md]   ## Ambient correction via SoupX (conditional on input.raw_path)
-[code] # for each source_dataset: if adata.uns["raw_matrix_path"][source] is not None:
-       #     load raw matrix, call SoupX (R cell), write corrected counts back
-       #     obs.ambient_correction_applied = True
+[md]   ## Ambient correction via SoupX (conditional on input.raw_path + Rscript + SoupX pkg)
+[code] # guard 1: check adata.uns["raw_matrix_path"]
+       # guard 2: check RSCRIPT_BIN executable + SoupX R package loadable
+       # for each source_dataset with raw_path, each sample:
+       #     1. extract original barcodes, export filtered counts (10x mtx) to temp dir
+       #     2. subprocess.run([RSCRIPT_BIN, "--vanilla", SOUPX_RSCRIPT, work, filt, raw, sample_id])
+       #     3. read corrected_counts.mtx, write back to adata.X
+       #     4. obs.ambient_correction_applied = True
        # else:
-       #     obs.ambient_correction_applied = False; log "no raw matrix"
+       #     obs.ambient_correction_applied = False; log skip reason
 [md]   ## Filter
 [code] # apply min_genes / max_genes / max_pct_mt thresholds
 [md]   ## QC visualisation post-filter (for before/after comparison)
@@ -1125,11 +1133,11 @@ No framework code is needed for this. The extension mechanism is the same scanpy
 #### `stage7/pseudobulk_deg.ipynb` (PR-3 in scope)
 
 ```
-[md]   # Stage 7: pseudobulk cross-condition DEG via DESeq2 (rpy2)
+[md]   # Stage 7: pseudobulk cross-condition DEG via DESeq2 (subprocess Rscript)
 [code] # === PARAMS === UPSTREAM_PATH, OUTPUT_PATH, sample_col, contrast_col, contrast_levels
-[code] # imports (decoupler for pseudobulk, rpy2 for DESeq2)
+[code] # imports (decoupler for pseudobulk, subprocess for DESeq2 Rscript)
 [code] # pseudobulk per (sample_id × cell_type_final_v1) using decoupler
-[code] # for each cell_type: hand pseudobulk count matrix + sample metadata to DESeq2 (R cell)
+[code] # export counts + metadata → subprocess.run([Rscript, "scripts/deseq2_contrast.R", ...])
 [code] # collate results across cell types into one CSV / dict in adata.uns
 [code] # plot: heatmap of top DEGs per cell type, volcano per contrast
 [code] # write CSVs to results/, optionally adata.uns["pseudobulk_deg_v1"]
