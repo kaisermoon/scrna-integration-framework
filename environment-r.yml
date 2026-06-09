@@ -1,19 +1,51 @@
+# scrna-integration-r —— R 环境源 spec（跨平台一致性，ADR-0010）
+#
+# 版本以 Mac（osx-arm64）已验证环境为准（2026-06-09 导出）。
+# 真实安装走 conda-lock 锁文件（conda-r.lock.yml），不要用 `conda env create -f` 直接 solve。
+#
+#   首次/重建：  conda-lock install --name scrna-integration-r conda-r.lock.yml
+#   新增/升级包：改本文件 → conda-lock -f environment-r.yml -p linux-64 -p osx-arm64 \
+#                          --lockfile conda-r.lock.yml → 提交 lock → 两机重装
+#
+# 跨平台关键（ADR-0010）：
+# - 只 pin 项目「直接用到」的功能包 + 编译元包；传递依赖（r-* 一大批）交给 conda-lock 按平台求解。
+# - 绝不 pin Mac 导出里的 osx-arm64 专属构建工具（clang_osx-arm64 / cctools_osx-arm64 /
+#   gfortran_osx-arm64 / ld64_osx-arm64 / sdkroot_env_osx-arm64 / sigtool-codesign / tapi /
+#   libcxx 等）——这些在 linux-64 不存在，会让 conda-lock 解 linux 失败。改用跨平台元包
+#   `compilers`，conda-forge 会按平台自动选 clang(osx) / gcc(linux) 工具链。
+# - monocle3 / hdWGCNA 无 conda 包，重建后在 R 内 BiocManager::install / remotes::install_github，
+#   两平台同一安装路径，天然一致，不列此处（见 docs/cross-platform-exceptions.md）。
 name: scrna-integration-r
 channels:
   - conda-forge
   - bioconda
+platforms:
+  - linux-64
+  - osx-arm64
 dependencies:
-  - r-base>=4.3
-  # === Stage 2: Ambient RNA correction (subprocess Rscript) ===
-  - r-soupx
-  # === Stage 7: Downstream modules (subprocess Rscript) ===
-  # Pseudobulk DEG (stage7/pseudobulk_deg)
-  - bioconductor-deseq2
-  # Cell-type scoring (stage6 annotation cross-check; stage7)
-  - bioconductor-ucell
-  # Pseudotime trajectory (stage7/pseudotime via Monocle3)
-  # - bioconductor-monocle3  # 无 conda 包；在 R 内 BiocManager::install("monocle3") 或参考官方文档
-  # Weighted gene co-expression network (stage7/gene_modules)
-  # - r-hdwgcn  # 无 conda 包；在 R 内 remotes::install_github("smorabit/hdWGCNA")
-  # === Optional: uncomment as needed ===
-  # - bioconductor-infercnv  # R-based CNV detection; prefer pure-Python infercnvpy
+  # === R 基础 + 编译工具（跨平台元包，按平台自动选 clang/gcc）===
+  - r-base=4.4.3
+  - compilers=1.11.0
+  - make=4.4.1
+  - pkg-config=0.29.2
+  # === Stage 2: Ambient RNA correction（subprocess Rscript）===
+  - r-soupx=1.6.2
+  # === Stage 7: 下游模块（subprocess Rscript）===
+  - bioconductor-deseq2=1.46.0          # pseudobulk DEG
+  - bioconductor-ucell=2.10.1           # 基因集评分（stage6 交叉校验 + stage7）
+  - bioconductor-complexheatmap=2.22.0  # 下游可视化
+  - bioconductor-limma=3.62.1
+  - bioconductor-singlecellexperiment=1.28.0
+  - bioconductor-geneoverlap=1.42.0
+  # === Seurat 生态（数据互转 / 部分下游）===
+  - r-seurat=5.5.0
+  - r-seuratobject=5.4.0
+  - r-harmony=2.0.2
+  - r-ggalluvial=0.12.6                 # cell communication Sankey
+  # === 从 GitHub/Bioc 装源码包所需（monocle3 / hdWGCNA 重建后 R 内装）===
+  - r-devtools=2.5.2
+  - r-remotes=2.5.0
+  - r-biocmanager=1.30.27
+  - r-leidenbase=0.1.36                 # monocle3 依赖，conda 有则先备好
+  # === Python 互操作（reticulate；rpy2 在 Python 环境侧）===
+  - r-reticulate=1.46.0

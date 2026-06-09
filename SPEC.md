@@ -586,15 +586,47 @@ rpy2 was formerly used only for SoupX at stage 2. The 2026-06-09 ADR-0007 revisi
 
 ### Environment management
 
-Two conda environment files at repo root: `environment.yml` (Python) and `environment-r.yml` (R). The R env is structured by stage so users skip optional packages (e.g. someone only doing QC skips Monocle3). README ships a one-liner `mamba env create + update` for both.
+Two conda environment files at repo root: `environment.yml` (Python) and `environment-r.yml` (R). The R env is structured by stage so users skip optional packages (e.g. someone only doing QC skips Monocle3).
 
 **环境隔离硬规定（agent 与 PI 都必须遵守）**：所有包安装一律在**专用命名 conda 环境**内进行，**绝不允许动 base / 主环境**。
 
 - Python 环境固定命名 `scrna-integration`，R 环境固定命名 `scrna-integration-r`（写入 `environment.yml` / `environment-r.yml` 的 `name:` 字段）。
 - agent **禁止** `pip install` / `conda install` 到 base 或任意非专用环境；禁止 `conda install -n base`；禁止无隔离的全局 `pip install`。
-- 任何安装前必须先 `conda activate scrna-integration`（或 `-r`）；环境不存在则先 `conda env create -f environment.yml`。
+- 任何安装前必须先 `conda activate scrna-integration`（或 `-r`）；环境不存在则先 `conda-lock install`（见下）。
 - CI 不实际装重型科学栈——`pyproject.toml` 与两个 `environment.yml` 是**声明**，真实安装由 PI/coder 在本地专用环境完成。验收以"依赖声明完整、smoke test（纯 import 框架包）通过、环境文件可被 conda 解析"为准，不要求 CI 跑完整安装。
 - reviewer 审 env 相关 PR 时红线检查：diff 出现写向 base/全局/非专用环境的安装命令或文档指引 → flag。
+
+### 跨平台一致性：conda-lock 双平台锁文件（ADR-0010）
+
+项目同时运行在两台机器：**开发机 Mac（Apple Silicon，`osx-arm64`）** 与 **服务器 Linux（x86-64，`linux-64`，无 GPU）**。要求两机的 conda 环境、包版本、代码函数行为**尽可能完全一致**；无法兼容的极少数包做**最小限度**显式登记切换。
+
+**版本一致 — 锁文件机制**：
+
+- **源 spec**（`environment.yml` / `environment-r.yml`）：人类可读，pin 到 Mac 已验证版本（`==`，**不带 build string** 以保持跨平台可移植）。这是"想要什么版本"的真相源。`pyproject.toml` 保持 `>=` 抽象依赖（库语义，不参与锁定）。
+- **锁文件**（`conda-py.lock.yml` / `conda-r.lock.yml`）：`conda-lock` 从源 spec 为 `linux-64` + `osx-arm64` **同时**求解生成，含完整 transitive 依赖 + 每平台 build + pip 依赖全栈。提交进 git，是"两台机器实际装什么"的真相源。同一包两平台锁**同一版本号**（只要该平台有 build）。
+- **两机都从 lock 安装**：`conda-lock install --name scrna-integration conda-py.lock.yml`（R 同理）。**不再**用 `conda env create -f environment.yml` 直接 solve（会重新漂移）。
+- **生成方 = Mac**（已验证版本真相源在 Mac）；conda-lock 跨平台求解，不依赖运行机架构。新增/升级包时在 Mac 改源 spec → 重生成 lock → 提交 → Linux 拉取后 `conda-lock install` 重建。
+
+**对齐异常登记** — `docs/cross-platform-exceptions.md`：
+
+osx-arm64 的 bioconda 覆盖弱于 linux-64，少数 R/生信包可能缺 native build。这是允许"最小切换"的唯一合法场景：
+
+- conda-lock 求解失败的包，优先用 conda-forge/bioconda 等价或 noarch build 对齐。
+- 实在无法对齐的，**显式登记**：包名、缺失平台、根因、回退方案（Mac 走 Rosetta `osx-64` 子环境 / R 内 `BiocManager::install` / 仅某平台启用）、功能影响。
+- 这是**异常清单非常态**，reviewer 每项质询"是否真无法对齐"，目标这张表尽可能短乃至为空。
+- `monocle3` / `hdWGCNA` 本无 conda 包（走 R 内 `BiocManager`/`remotes`，两平台同一路径，天然一致），不算异常。
+
+**代码一致 — OS 检测单点收口** `src/scrna_integration/platform.py`：
+
+- 全项目**唯一**的 OS/路径差异收口点。`os.uname()` / `sys.platform` / `platform.system()` 判断**只允许**出现在此模块。
+- `rscript_bin()`：从 `CONDA_PREFIX` 上溯派生 `{envs_dir}/scrna-integration-r/bin/Rscript`，跨平台同一逻辑。**所有 notebook 删除 Mac 硬编码 fallback 与写死 `"Rscript"`，统一改调 `platform.rscript_bin()`**。
+- 判据：notebook 与 `src` 其他文件**不得出现** OS 判断或平台绝对路径。reviewer grep `sys.platform` / `os.uname` / `/Users/` / `/home/` 硬编码路径，命中本模块以外即 flag。
+
+**环境同步硬约束**：
+
+- **conda 环境目录永不进 Syncthing / git**（环境内是平台相关编译二进制，arm64 `.so`/`.dylib` 在 linux-64 无法运行，跨平台同步会损坏环境）。只有 lock 文件、源 spec、`platform.py`、异常登记表随同步走。两机各自 `conda-lock install` 重建。
+
+**验收**：全流程需在 **Linux 与 Mac 两台机器各跑一遍端到端**，记录版本一致性 + 异常表，作为 ADR-0010 落地验收。
 
 ---
 

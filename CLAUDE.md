@@ -54,6 +54,7 @@ updated: "2026-06-08"
 - **conda 环境隔离**：所有装包在专用 `scrna-integration` / `scrna-integration-r`，绝不动 base。多 worktree 共享环境用 `PYTHONPATH=src pytest`，禁止 `pip install -e .`（editable 会互相覆盖）。
 - **注释中文 + 充分讲 why**（ADR-0009，面向 PI + 非计算机专业学生）。
 - **薄框架 + 教学透明**（ADR-0001/0003/0004/0009）：新增任何 helper/抽象，判据是"非 CS 学生打开 notebook 能否逐行看懂"，不只是"填了 scanpy 空白"。
+- **跨平台一致性**（ADR-0010）：项目同时跑在 Mac（osx-arm64）+ Linux 服务器（linux-64）。① 版本一致靠 **conda-lock 双平台锁文件**（源 spec 用 `==` pin，lock 文件进 git，两机都 `conda-lock install`，绝不 `conda env create` 直接 solve）② 无法对齐的极少数包登记 `docs/cross-platform-exceptions.md`（异常非常态）③ OS 检测**只能**写在 `src/scrna_integration/platform.py`，notebook/src 其他位置禁出现 `sys.platform`/`os.uname`/平台绝对路径（`/Users/`、`/home/`）④ **conda 环境目录永不进 Syncthing/git**，只同步 lock+spec+platform.py+异常表。reviewer 卡这四条。
 
 ## 五、关键文件指针
 
