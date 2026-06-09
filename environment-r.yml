@@ -13,8 +13,10 @@
 #   gfortran_osx-arm64 / ld64_osx-arm64 / sdkroot_env_osx-arm64 / sigtool-codesign / tapi /
 #   libcxx 等）——这些在 linux-64 不存在，会让 conda-lock 解 linux 失败。改用跨平台元包
 #   `compilers`，conda-forge 会按平台自动选 clang(osx) / gcc(linux) 工具链。
-# - monocle3 / hdWGCNA 无 conda 包，重建后在 R 内 BiocManager::install / remotes::install_github，
-#   两平台同一安装路径，天然一致，不列此处（见 docs/cross-platform-exceptions.md）。
+# - monocle3 / hdWGCNA / WGCNA / CellChat 不进 conda（r-wgcna 在 bioconda 仅 linux-64、
+#   osx-arm64 缺包，放进来会让 conda-lock 解 Mac 失败；其余三个无 conda 包）。统一在重建后
+#   于 R 内安装（WGCNA 走 CRAN install.packages，两平台都有；monocle3/hdWGCNA/CellChat 走
+#   BiocManager/remotes），两平台同一安装路径天然一致，见 docs/cross-platform-exceptions.md。
 name: scrna-integration-r
 channels:
   - conda-forge
