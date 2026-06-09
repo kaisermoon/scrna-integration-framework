@@ -1,0 +1,49 @@
+# ╔══════════════════════════════════════════════════════════════╗
+# ║ 测试夹具 -- 测试用 marker，非正式文献库                     ║
+# ║ PI 将在 PR-5 用真实引用替换所有 reference 字段               ║
+# ║ 所有基因均为教科书级胃细胞标准 marker，PI 确认真实          ║
+# ╚══════════════════════════════════════════════════════════════╝
+tissue,cell_type,marker,role,reference,notes
+gastric,pit_cell,MUC5AC,canonical,TEST_FIXTURE_待PI核验替换,胃小凹细胞经典标记物
+gastric,pit_cell,TFF1,canonical,TEST_FIXTURE_待PI核验替换,胃小凹细胞经典标记物
+gastric,pit_cell,GKN1,canonical,TEST_FIXTURE_待PI核验替换,胃小凹细胞经典标记物
+gastric,pit_cell,GKN2,canonical,TEST_FIXTURE_待PI核验替换,胃小凹细胞经典标记物
+gastric,SPEM,MUC6,canonical,TEST_FIXTURE_待PI核验替换,黏液颈细胞/SPEM经典标记物
+gastric,SPEM,TFF2,canonical,TEST_FIXTURE_待PI核验替换,黏液颈细胞/SPEM经典标记物
+gastric,SPEM,AQP5,canonical,TEST_FIXTURE_待PI核验替换,黏液颈细胞/SPEM辅助标记物
+gastric,chief_cell,LIPF,canonical,TEST_FIXTURE_待PI核验替换,主细胞经典标记物(胃脂肪酶)
+gastric,chief_cell,PGA3,canonical,TEST_FIXTURE_待PI核验替换,主细胞经典标记物(胃蛋白酶原A3)
+gastric,chief_cell,PGC,canonical,TEST_FIXTURE_待PI核验替换,主细胞经典标记物(胃蛋白酶原C/progastricsin)
+gastric,parietal_cell,ATP4A,canonical,TEST_FIXTURE_待PI核验替换,壁细胞经典标记物(H+/K+ ATPase alpha)
+gastric,parietal_cell,ATP4B,canonical,TEST_FIXTURE_待PI核验替换,壁细胞经典标记物(H+/K+ ATPase beta)
+gastric,parietal_cell,GIF,canonical,TEST_FIXTURE_待PI核验替换,壁细胞经典标记物(胃内因子)
+gastric,enteroendocrine,CHGA,canonical,TEST_FIXTURE_待PI核验替换,肠内分泌细胞经典标记物(嗜铬粒蛋白A)
+gastric,enteroendocrine,CHGB,canonical,TEST_FIXTURE_待PI核验替换,肠内分泌细胞经典标记物(嗜铬粒蛋白B)
+gastric,enteroendocrine,GAST,canonical,TEST_FIXTURE_待PI核验替换,胃泌素(G细胞)
+gastric,enteroendocrine,SST,canonical,TEST_FIXTURE_待PI核验替换,生长抑素(D细胞)
+gastric,intestinal_metaplasia,CDX2,canonical,TEST_FIXTURE_待PI核验替换,肠化生经典标记物(肠转录因子)
+gastric,intestinal_metaplasia,MUC2,canonical,TEST_FIXTURE_待PI核验替换,肠化生经典标记物(肠型黏蛋白)
+gastric,intestinal_metaplasia,TFF3,canonical,TEST_FIXTURE_待PI核验替换,肠化生经典标记物(肠三叶因子)
+gastric,intestinal_metaplasia,CDH17,canonical,TEST_FIXTURE_待PI核验替换,肠化生辅助标记物(肝肠钙黏蛋白)
+gastric,intestinal_metaplasia,REG4,canonical,TEST_FIXTURE_待PI核验替换,肠化生辅助标记物(再生家族蛋白4)
+gastric,proliferative,MKI67,canonical,TEST_FIXTURE_待PI核验替换,增殖细胞经典标记物
+gastric,proliferative,OLFM4,canonical,TEST_FIXTURE_待PI核验替换,胃干细胞/祖细胞标记物
+gastric,proliferative,LGR5,canonical,TEST_FIXTURE_待PI核验替换,胃干细胞标记物
+gastric,T_cell,CD3D,canonical,TEST_FIXTURE_待PI核验替换,T细胞经典标记物
+gastric,T_cell,CD3E,canonical,TEST_FIXTURE_待PI核验替换,T细胞经典标记物
+gastric,T_cell,CD2,canonical,TEST_FIXTURE_待PI核验替换,T细胞辅助标记物
+gastric,T_cell,IL7R,canonical,TEST_FIXTURE_待PI核验替换,T细胞辅助标记物
+gastric,B_plasma,CD79A,canonical,TEST_FIXTURE_待PI核验替换,B细胞经典标记物
+gastric,B_plasma,MS4A1,canonical,TEST_FIXTURE_待PI核验替换,B细胞经典标记物(CD20)
+gastric,B_plasma,MZB1,canonical,TEST_FIXTURE_待PI核验替换,浆细胞标记物
+gastric,B_plasma,IGHG1,canonical,TEST_FIXTURE_待PI核验替换,浆细胞标记物(免疫球蛋白重链)
+gastric,myeloid,CD68,canonical,TEST_FIXTURE_待PI核验替换,巨噬细胞经典标记物
+gastric,myeloid,LYZ,canonical,TEST_FIXTURE_待PI核验替换,髓系细胞标记物(溶菌酶)
+gastric,myeloid,CD14,canonical,TEST_FIXTURE_待PI核验替换,单核/巨噬细胞标记物
+gastric,endothelial,PECAM1,canonical,TEST_FIXTURE_待PI核验替换,内皮细胞经典标记物(CD31)
+gastric,endothelial,VWF,canonical,TEST_FIXTURE_待PI核验替换,内皮细胞经典标记物(von Willebrand因子)
+gastric,endothelial,CLDN5,canonical,TEST_FIXTURE_待PI核验替换,内皮细胞紧密连接标记物
+gastric,fibroblast,DCN,canonical,TEST_FIXTURE_待PI核验替换,成纤维细胞/基质标记物(核心蛋白聚糖)
+gastric,fibroblast,COL1A1,canonical,TEST_FIXTURE_待PI核验替换,成纤维细胞经典标记物(I型胶原)
+gastric,fibroblast,PDGFRB,canonical,TEST_FIXTURE_待PI核验替换,成纤维细胞/周细胞标记物
+gastric,fibroblast,ACTA2,canonical,TEST_FIXTURE_待PI核验替换,肌成纤维细胞/平滑肌标记物

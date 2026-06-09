@@ -50,7 +50,7 @@ def load_markers(
 
         sc.pl.dotplot(adata, var_names=markers, groupby="leiden")
     """
-    df = pd.read_csv(csv_path)
+    df = pd.read_csv(csv_path, comment="#")
 
     # 列名校验（PI 手填 CSV 时容易打错列名，缺列时 pd 会抛 KeyError
     # 对非计算机专业用户不友好，这里前置校验并给出中文报错）
