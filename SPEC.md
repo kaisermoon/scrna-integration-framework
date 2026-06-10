@@ -523,7 +523,7 @@ adata[cell_ids].X = sp.csr_matrix(corrected.T)
 adata.obs.loc[cell_ids, "ambient_correction_applied"] = True
 ```
 
-### Concrete example — Monocle3 (07 pseudotime, subprocess Rscript)
+### Concrete example — Monocle3 (10 pseudotime, subprocess Rscript)
 
 Heavy R tools use subprocess + temp files (ADR-0007), the pattern validated in `student-code/workflow_for_pseudotime/4.3_*.py`:
 
@@ -549,7 +549,7 @@ adata.obs["pseudotime_monocle3_v1"] = pt["pseudotime"].reindex(adata.obs_names)
 
 The `.R` script (`new_cell_data_set` → `preprocess_cds` → `reduce_dimension` → `cluster_cells` → `learn_graph` → `order_cells` → write `pseudotime.csv` + save plots) is a standalone file, independently runnable and debuggable outside the notebook.
 
-### Concrete example — pseudobulk DESeq2 (07 cross-condition DEG, subprocess Rscript)
+### Concrete example — pseudobulk DESeq2 (08 pseudobulk DEG, subprocess Rscript)
 
 ```python
 # Cell A: pseudobulk in Python (sample-level aggregation)
@@ -733,7 +733,7 @@ PI explicitly accepts that QC heterogeneity propagates into 04-7 results — str
 
 - **Doublet alignment is NOT mandatory across datasets**. A dataset that ships already-doublet-removed (Tsubosaka, Nowicki, Kim) skips scrublet at 02; a raw cellranger dataset (Nancang) runs scrublet. The two datasets enter 03+ with different doublet histories. The framework does not force a "re-run scrublet on already-cleaned data to produce a comparable score" alignment step. PI accepts the resulting risk that Harmony/scVI batch correction at 04 may treat residual doublets in some datasets as `false batch effect`. Mitigation is a disclaimer in the 04 sweep report when `qc_heterogeneous=True`, not an alignment step.
 - **Ambient correction is physically gated by data availability.** SoupX requires `input.raw_path` in the manifest (the cellranger raw_feature_bc_matrix). Datasets that ship only filtered matrices cannot run SoupX — there is no way to "force align". `obs.ambient_correction_applied` records the actual situation per dataset; downstream consumers read it.
-- **07 cross-condition DEG / pseudobulk** carries the same disclaimer. Pseudobulk averaging dilutes single-cell-level QC heterogeneity to some extent (multi-cell mean per sample), but cannot eliminate systematic bias when one cohort has been doublet-removed and another has not. PI accepts this risk for now; if it produces visibly biased DEG results in the GCPL pilot, alignment can be reconsidered as a per-project step.
+- **08 pseudobulk DEG / 10 pseudotime** carries the same disclaimer. Pseudobulk averaging dilutes single-cell-level QC heterogeneity to some extent (multi-cell mean per sample), but cannot eliminate systematic bias when one cohort has been doublet-removed and another has not. PI accepts this risk for now; if it produces visibly biased DEG results in the GCPL pilot, alignment can be reconsidered as a per-project step.
 
 ### Cross-method comparison reads QC context
 

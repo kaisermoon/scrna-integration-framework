@@ -5,8 +5,8 @@ make_test_subset.py
 Sample representative test fixture subsets from full GCPL datasets (~772k cells).
 
 Produces two fixture sets into `data/_subset/` (gitignored):
-  Fixture A: Per-source subsets preserving original data shapes for stage1-2 testing.
-  Fixture B: Downstream subset from 02_qc_filtered_data.h5ad for stage3+ testing.
+  Fixture A: Per-source subsets preserving original data shapes for 01-02 testing.
+  Fixture B: Downstream subset from 02_qc_filtered_data.h5ad for 03+ testing.
 
 All random sampling uses a fixed seed for reproducibility.
 Each source is sampled independently; one source failure does not crash the whole script.
@@ -597,7 +597,7 @@ def main() -> None:
     print(f"\n  {success}/{len(results)} sources completed (Tsubosaka skipped = expected)")
 
     if all(results.get(k, True) for k in ["Kim", "Nancang", "Nowicki", "Yue", "Fixture_B"]):
-        print("  Fixture A (4/5 sources) + Fixture B ready for stage1-3+ testing.")
+        print("  Fixture A (4/5 sources) + Fixture B ready for 01-03+ testing.")
     else:
         print("  Some sources failed unexpectedly — check output above.")
 
