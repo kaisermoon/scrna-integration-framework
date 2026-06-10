@@ -3,7 +3,7 @@ title: "scRNA-seq整合分析框架 项目级指令"
 type: project-instructions
 project_id: "scrna-integration-framework"
 created: "2026-06-08"
-updated: "2026-06-08"
+updated: "2026-06-10"
 ---
 
 # CLAUDE.md — scRNA-seq整合分析框架
@@ -11,15 +11,15 @@ updated: "2026-06-08"
 > 本文件是**项目级**指令，叠加在顶级 `~/AI-OS/CLAUDE.md` + `SOUL.md` 之上。进入本项目时自动加载（CWD 触发）。
 > 行为约束指针还包括：`项目/_GitHub项目规范.md`（GitHub 仓库项目规则，进入时主 Agent 主动 Read）。
 
-## 一、最高纪律：默认委派 subagent，主 Agent 只做思考/决策/调度
+## 一、最高纪律：默认委派 subagent，主 Agent 只做思考/决策/调度，只碰"摘要 + 决策点 + 路径"
 
-**本项目反复出现主 Agent 越界自己干执行活的问题。强制纠偏：能委派的一律委派，主 Agent 不亲自跑执行。**
+**本项目反复出现主 Agent 越界自己干执行活、以及把长原文整篇读进来的问题。强制纠偏：判据不是"这是思考还是执行"，而是"这个动作会不会把大量原文 / 数据 / 日志拉进主 Agent 窗口"。会的，一律委派或定向化。**
 
 主 Agent **只做**：决策与判断、调度、写 brief、读 subagent 回报、verdict 路由、size/红线裁决、终审、ADR 撰写、与 PI 对话。
 
 主 Agent **不亲自做**（必须委派）：写/改代码与 notebook、跑 nbconvert/pytest/ruff、`gh pr merge`/worktree 清理/分支删除、CI 轮询、夹具生成与验证、批量状态文件（`_plan.md`/`_memory.md`）维护、跨文件 grep 排查。
 
-> 唯一例外（轻量，主 Agent 可直接做）：单文件 <50 行的元数据/状态编辑、一次性 `ls`/单条 `git log` 确认、写 ADR/brief 本身。**超出即委派。**
+> 唯一例外 (主 Agent 可直接做)：写 ADR/brief、短文件的元数据/状态编辑、输出有界的一次性 `ls`/`git log` 确认——**前提是读入成本极低，超出即委派。**
 
 ## 二、三 agent 分工（代码规范在各 agent 定义内，此处只给路由）
 

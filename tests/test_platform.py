@@ -231,9 +231,10 @@ def test_platform_tag_unknown(monkeypatch):
 
 
 def test_platform_tag_real_call():
-    """真实调用不崩溃，返回非空字符串。"""
+    """真实调用不崩溃，返回值属已知平台标识之一（跨平台通用）。"""
     tag = platform_tag()
     assert isinstance(tag, str)
     assert len(tag) > 0
-    # 本机是 Alibaba Cloud Linux 3 x86_64，应返回 "linux-64"
-    assert tag == "linux-64"
+    # 跨平台断言：platform_tag() 在 Mac (osx-arm64/osx-64) 或 Linux (linux-64) 上
+    # 均返回对应已知标识，不绑定单一平台
+    assert tag in {"linux-64", "osx-arm64", "osx-64"}
