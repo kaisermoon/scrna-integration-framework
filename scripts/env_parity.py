@@ -20,9 +20,9 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
-import platform as _platform
 import shutil
 import socket
 import subprocess
@@ -30,45 +30,24 @@ import sys
 import time
 from typing import Any
 
-# ---- 自举导入 platform_tag ----
-# 不能直接 ``from scrna_integration.platform import platform_tag``，
-# 因为 scrna_integration/__init__.py 触发的级联导入（anndata / scanpy 等）
-# 只在 conda 环境内可用。本脚本用系统 Python 跑 conda 子进程，自己不进 conda
-# 环境，所以改为直接读 platform.py 源码内联 platform_tag 逻辑。
-
-
-def platform_tag() -> str:
-    """返回标准化的平台标识字符串（内联版，与 platform.py 保持同步）。
-
-    为什么内联而不是复用 platform.py？
-    ----------------------------------
-    本脚本设计为用系统 Python 直接跑（不依赖 conda 环境激活），
-    而 scrna_integration 包的 __init__.py 会触发 anndata/scanpy 等重型导入，
-    系统 Python 中不存在。此处内联 platform_tag 的逻辑（纯 stdlib），
-    避免不必要的依赖。
-    """
-    system = _platform.system().lower()
-    machine = _platform.machine().lower()
-    if system == "darwin":
-        if machine == "arm64":
-            return "osx-arm64"
-        if machine in ("x86_64", "amd64"):
-            return "osx-64"
-        return f"osx-{machine}"
-    if system == "linux":
-        if machine == "x86_64":
-            return "linux-64"
-        if machine == "aarch64":
-            return "linux-aarch64"
-        return f"linux-{machine}"
-    return f"{system}-{machine}"
-
-
 # ============================================================================
 # 常量
 # ============================================================================
 # 项目根目录（scripts/ 的上一级）
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+# ---- 自举导入 platform_tag（importlib 直加载源文件，不触发包 __init__） ----
+# 不能 ``from scrna_integration.platform import platform_tag``，
+# 因为 scrna_integration/__init__.py 触发的级联导入（anndata / scanpy 等）
+# 只在 conda 环境内可用。改用 importlib.util 直接加载 platform.py 源文件，
+# 不经过包 __init__，保持 ADR-0010 单点收口。
+_spec = importlib.util.spec_from_file_location(
+    "scrna_integration_platform",
+    os.path.join(PROJECT_ROOT, "src", "scrna_integration", "platform.py"),
+)
+_platform_mod = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_platform_mod)
+platform_tag = _platform_mod.platform_tag
 
 # 快照输出目录
 SNAPSHOT_DIR = os.path.join(PROJECT_ROOT, "docs", "env-snapshots")
@@ -363,10 +342,20 @@ def cmd_compare(args: argparse.Namespace) -> int:
         return 2
 
     # 加载快照
-    with open(path_a, encoding="utf-8") as f:
-        snap_a = json.load(f)
-    with open(path_b, encoding="utf-8") as f:
-        snap_b = json.load(f)
+    try:
+        with open(path_a, encoding="utf-8") as f:
+            snap_a = json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"[错误] 快照文件 A 不是有效 JSON: {path_a}")
+        print(f"       {e}")
+        return 2
+    try:
+        with open(path_b, encoding="utf-8") as f:
+            snap_b = json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"[错误] 快照文件 B 不是有效 JSON: {path_b}")
+        print(f"       {e}")
+        return 2
 
     # 提取身份信息用于显示
     machine_a = snap_a.get("machine", {})
