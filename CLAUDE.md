@@ -60,4 +60,4 @@ updated: "2026-06-10"
 
 - `_project.md` 元数据 / `_plan.md` PR 计划与状态 / `_memory.md` 项目记忆（含会话保存点，续跑先读它）
 - `SPEC.md` 实现规格 / `CONTEXT.md` 术语表 / `docs/adr/` 架构决策（0001-0009）
-- `.env.example` LLM provider key+url 模板（stage6 mLLMCelltype 多模型直连）
+- `.env.example` LLM provider key+url 模板（06 mLLMCelltype 多模型直连）

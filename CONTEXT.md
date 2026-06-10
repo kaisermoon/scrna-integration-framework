@@ -68,7 +68,7 @@ Cell-type labels carried by a source dataset at ingest time. Stored in `cell_typ
 _Avoid_: Pre-existing annotation, prior label.
 
 **Cross-method comparison** (annotation; 中文：交叉比对):
-The Stage 6 notebook step where multiple annotation methods (default co-run: marker / mLLMCelltype / gene-set scoring; scANVI when a reference atlas exists; CellTypist as a commented-out candidate; plus original author annotations) are compared via confusion matrices, Sankey diagrams, and LLM verdicts to reach a final per-cluster cell-type assignment. Running several methods together is for cross-validation, not redundancy. Implemented in `stage6_annotated.ipynb`, not in framework code.
+The 06 notebook step where multiple annotation methods (default co-run: marker / mLLMCelltype / gene-set scoring; scANVI when a reference atlas exists; CellTypist as a commented-out candidate; plus original author annotations) are compared via confusion matrices, Sankey diagrams, and LLM verdicts to reach a final per-cluster cell-type assignment. Running several methods together is for cross-validation, not redundancy. Implemented in `06_annotated.ipynb`, not in framework code.
 _Avoid_: Consensus (overloaded — LLM consensus is one input to the cross-method comparison), reconciliation, crosswalk (rejected as obscure jargon).
 
 **Marker library**:
@@ -88,11 +88,11 @@ The three tiers of obs columns. Layer 1 is required core (manifest enforces); La
 _Avoid_: Required / recommended / optional (less precise — Layer 3 is "optional" only in the sense of not framework-prescribed; it can still be project-required).
 
 **LLM verdict**:
-The natural-language judgement an LLM writes for one cluster during stage 6 cross-method comparison, summarising what each annotation method called this cluster, what the markers / scores show, and what cell type the LLM recommends as final. PI reads every verdict and decides.
+The natural-language judgement an LLM writes for one cluster during 06 cross-method comparison, summarising what each annotation method called this cluster, what the markers / scores show, and what cell type the LLM recommends as final. PI reads every verdict and decides.
 _Avoid_: AI annotation, LLM call (too generic).
 
 **Sweep recommendations**:
-The auto-generated section at the end of a stage 6 report listing parameter combinations the LLM judges worth running based on single-run results (e.g. clusters with high uncertainty, methods with systematic disagreement). PI decides whether to act. Note: named "sweep" as a workflow concept; the `sweep()` framework function was removed per ADR-0009.
+The auto-generated section at the end of a 06 report listing parameter combinations the LLM judges worth running based on single-run results (e.g. clusters with high uncertainty, methods with systematic disagreement). PI decides whether to act. Note: named "sweep" as a workflow concept; the `sweep()` framework function was removed per ADR-0009.
 _Avoid_: Suggestions, hints.
 
 **Self-check**:
