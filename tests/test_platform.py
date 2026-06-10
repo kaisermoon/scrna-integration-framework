@@ -8,7 +8,7 @@ import tempfile
 
 import pytest
 
-from scrna_integration.platform import rscript_bin
+from scrna_integration.platform import platform_tag, rscript_bin
 
 # ---------------------------------------------------------------------------
 # 辅助：在临时目录中模拟 conda 环境目录结构
@@ -195,3 +195,45 @@ def test_rscript_bin_returns_absolute_path(monkeypatch):
         result = rscript_bin()
         assert os.path.isabs(result)
         assert result == expected
+
+
+# ---------------------------------------------------------------------------
+# 测试：platform_tag() 平台标识映射
+# ---------------------------------------------------------------------------
+
+
+def test_platform_tag_linux_x86_64(monkeypatch):
+    """Linux x86_64 → 'linux-64'。"""
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+    monkeypatch.setattr("platform.machine", lambda: "x86_64")
+    assert platform_tag() == "linux-64"
+
+
+def test_platform_tag_darwin_arm64(monkeypatch):
+    """macOS Apple Silicon → 'osx-arm64'。"""
+    monkeypatch.setattr("platform.system", lambda: "Darwin")
+    monkeypatch.setattr("platform.machine", lambda: "arm64")
+    assert platform_tag() == "osx-arm64"
+
+
+def test_platform_tag_darwin_x86_64(monkeypatch):
+    """macOS Intel → 'osx-64'。"""
+    monkeypatch.setattr("platform.system", lambda: "Darwin")
+    monkeypatch.setattr("platform.machine", lambda: "x86_64")
+    assert platform_tag() == "osx-64"
+
+
+def test_platform_tag_unknown(monkeypatch):
+    """无法识别的系统/架构 → '{system}-{machine}' 原样。"""
+    monkeypatch.setattr("platform.system", lambda: "Windows")
+    monkeypatch.setattr("platform.machine", lambda: "AMD64")
+    assert platform_tag() == "windows-amd64"
+
+
+def test_platform_tag_real_call():
+    """真实调用不崩溃，返回非空字符串。"""
+    tag = platform_tag()
+    assert isinstance(tag, str)
+    assert len(tag) > 0
+    # 本机是 Alibaba Cloud Linux 3 x86_64，应返回 "linux-64"
+    assert tag == "linux-64"

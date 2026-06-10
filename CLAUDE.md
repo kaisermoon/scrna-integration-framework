@@ -11,11 +11,11 @@ updated: "2026-06-08"
 > 本文件是**项目级**指令，叠加在顶级 `~/AI-OS/CLAUDE.md` + `SOUL.md` 之上。进入本项目时自动加载（CWD 触发）。
 > 行为约束指针还包括：`项目/_GitHub项目规范.md`（GitHub 仓库项目规则，进入时主 Agent 主动 Read）。
 
-## 一、最高纪律：默认委派 subagent，主 Agent 只做思考/决策
+## 一、最高纪律：默认委派 subagent，主 Agent 只做思考/决策/调度
 
-**本项目反复出现主 Agent 越界自己干执行活的问题（2026-06-08 复盘）。强制纠偏：能委派的一律委派，主 Agent 不亲自跑执行。**
+**本项目反复出现主 Agent 越界自己干执行活的问题。强制纠偏：能委派的一律委派，主 Agent 不亲自跑执行。**
 
-主 Agent **只做**：决策与判断、写 brief、读 subagent 回报、verdict 路由、size/红线裁决、终审、ADR 撰写、与 PI 对话。
+主 Agent **只做**：决策与判断、调度、写 brief、读 subagent 回报、verdict 路由、size/红线裁决、终审、ADR 撰写、与 PI 对话。
 
 主 Agent **不亲自做**（必须委派）：写/改代码与 notebook、跑 nbconvert/pytest/ruff、`gh pr merge`/worktree 清理/分支删除、CI 轮询、夹具生成与验证、批量状态文件（`_plan.md`/`_memory.md`）维护、跨文件 grep 排查。
 
@@ -54,6 +54,7 @@ updated: "2026-06-08"
 - **conda 环境隔离**：所有装包在专用 `scrna-integration` / `scrna-integration-r`，绝不动 base。多 worktree 共享环境用 `PYTHONPATH=src pytest`，禁止 `pip install -e .`（editable 会互相覆盖）。
 - **注释中文 + 充分讲 why**（ADR-0009，面向 PI + 非计算机专业学生）。
 - **薄框架 + 教学透明**（ADR-0001/0003/0004/0009）：新增任何 helper/抽象，判据是"非 CS 学生打开 notebook 能否逐行看懂"，不只是"填了 scanpy 空白"。
+- **跨平台一致性**（ADR-0010）：项目同时跑在 Mac（osx-arm64）+ Linux 服务器（linux-64）。① 版本一致靠 **精确 pin 源 spec + env_parity 诊断脚本 + 人工对齐**（源 spec 用 `==` pin 作为期望基准，两机 `conda env create -f environment.yml` 直接安装，`scripts/env_parity.py snapshot` 留快照，`compare` 出差异供人工决定对齐）② 无法对齐的极少数包登记 `docs/cross-platform-exceptions.md`（异常非常态）③ OS 检测**只能**写在 `src/scrna_integration/platform.py`，notebook/src 其他位置禁出现 `sys.platform`/`os.uname`/平台绝对路径（`/Users/`、`/home/`）④ **conda 环境目录永不进 Syncthing/git**，只同步源 spec+platform.py+异常表+快照 JSON。reviewer 卡这四条。
 
 ## 五、关键文件指针
 
