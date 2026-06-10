@@ -65,6 +65,8 @@ results/figures/
 results/tables/
 results/_deseq2_tmp/
 results/_hdWGCNA_tmp/
+# hdWGCNA 真跑副产物：拓扑重叠矩阵（~11MB .rda），每次运行生成
+TOM/
 results/_soupx_tmp/
 *.tmp
 
