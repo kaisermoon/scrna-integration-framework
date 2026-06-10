@@ -1,20 +1,22 @@
 # scrna-integration-r —— R 环境源 spec（跨平台一致性，ADR-0010）
 #
 # 版本以 Mac（osx-arm64）已验证环境为准（2026-06-09 导出）。
-# 真实安装走 conda-lock 锁文件（conda-r.lock.yml），不要用 `conda env create -f` 直接 solve。
+# 安装方式：conda env create -f environment-r.yml（或 mamba）。
+# 精确 pin（==）已尽量保证两机装出版本一致；装好后跑 `python scripts/env_parity.py snapshot` 留快照，
+# 换机时用 `compare` 对差异，人工决定对齐。
 #
-#   首次/重建：  conda-lock install --name scrna-integration-r conda-r.lock.yml
-#   新增/升级包：改本文件 → conda-lock -f environment-r.yml -p linux-64 -p osx-arm64 \
-#                          --lockfile conda-r.lock.yml → 提交 lock → 两机重装
+#   首次安装：  conda env create -f environment-r.yml
+#   新增/升级包：改本文件 → conda install -n scrna-integration-r <pkg>==<version>
+#               → 重跑 `python scripts/env_parity.py snapshot` 更新快照
 #
 # 跨平台关键（ADR-0010）：
-# - 只 pin 项目「直接用到」的功能包 + 编译元包；传递依赖（r-* 一大批）交给 conda-lock 按平台求解。
+# - 只 pin 项目「直接用到」的功能包 + 编译元包；传递依赖（r-* 一大批）交给 conda 按平台求解。
 # - 绝不 pin Mac 导出里的 osx-arm64 专属构建工具（clang_osx-arm64 / cctools_osx-arm64 /
 #   gfortran_osx-arm64 / ld64_osx-arm64 / sdkroot_env_osx-arm64 / sigtool-codesign / tapi /
-#   libcxx 等）——这些在 linux-64 不存在，会让 conda-lock 解 linux 失败。改用跨平台元包
+#   libcxx 等）——这些在 linux-64 不存在，会让 conda 解 linux 失败。改用跨平台元包
 #   `compilers`，conda-forge 会按平台自动选 clang(osx) / gcc(linux) 工具链。
 # - monocle3 / hdWGCNA / WGCNA / CellChat 不进 conda（r-wgcna 在 bioconda 仅 linux-64、
-#   osx-arm64 缺包，放进来会让 conda-lock 解 Mac 失败；其余三个无 conda 包）。统一在重建后
+#   osx-arm64 缺包；其余三个无 conda 包）。统一在重建后
 #   于 R 内安装（WGCNA 走 CRAN install.packages，两平台都有；monocle3/hdWGCNA/CellChat 走
 #   BiocManager/remotes），两平台同一安装路径天然一致，见 docs/cross-platform-exceptions.md。
 name: scrna-integration-r

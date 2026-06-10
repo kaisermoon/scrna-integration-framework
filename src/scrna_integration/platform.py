@@ -8,7 +8,7 @@
 为什么需要这个模块？
 --------------------
 框架的 conda 环境结构在 Mac（osx-arm64）和 Linux 服务器（linux-64）
-上保持一致（通过 conda-lock 跨平台锁文件保证），但 conda 安装根目录
+上保持一致（通过精确 pin 的源 spec + env_parity 诊断脚本人工对齐保证），但 conda 安装根目录
 在不同机器上不同。例如：
   - Mac:  /Users/alice/miniforge3/envs/scrna-integration-r/bin/Rscript
   - Linux: /home/bob/miniforge3/envs/scrna-integration-r/bin/Rscript
@@ -34,7 +34,57 @@
 from __future__ import annotations
 
 import os
+import platform as _platform
 import shutil
+
+
+def platform_tag() -> str:
+    """返回标准化的平台标识字符串，用于快照文件命名与跨机器对比。
+
+    为什么需要这个函数？
+    --------------------
+    项目同时跑在 Mac（Apple Silicon）和 Linux 服务器（x86_64）上。
+    两台机器的 conda 环境包清单需要分别导出、统一对比。
+    如果没有一个标准化的平台标识，对比脚本就不知道"谁和谁比"。
+    本函数是 ADR-0010「OS 检测单点收口」的合理扩充——平台标识也属 OS 感知。
+
+    返回
+    -------
+    str
+        标准化平台标识：
+        - ``"linux-64"``   —— Linux + x86_64
+        - ``"osx-arm64"``  —— macOS + Apple Silicon（arm64）
+        - ``"osx-64"``     —— macOS + Intel x86_64
+        - 其他无法识别时返回 ``"{system}-{machine}"`` 原样（如 ``"windows-AMD64"``）
+
+    使用示例
+    --------
+    >>> from scrna_integration.platform import platform_tag
+    >>> tag = platform_tag()   # 本机返回 "linux-64"
+    >>> snapshot_path = f"docs/env-snapshots/{tag}.json"
+    """
+    system = _platform.system().lower()    # "linux" / "darwin" / "windows"
+    machine = _platform.machine().lower()  # "x86_64" / "arm64" / "amd64"
+
+    # macOS 需要区分 Intel 和 Apple Silicon
+    if system == "darwin":
+        if machine == "arm64":
+            return "osx-arm64"
+        if machine in ("x86_64", "amd64"):
+            return "osx-64"
+        return f"osx-{machine}"
+
+    # Linux：绝大部分情况是 x86_64 服务器
+    if system == "linux":
+        if machine == "x86_64":
+            return "linux-64"
+        # 将来的 aarch64 服务器场景
+        if machine == "aarch64":
+            return "linux-aarch64"
+        return f"linux-{machine}"
+
+    # 无法识别时返回原始 system-machine 组合，不造缩写
+    return f"{system}-{machine}"
 
 
 def rscript_bin(r_env_name: str = "scrna-integration-r") -> str:
@@ -97,9 +147,8 @@ def rscript_bin(r_env_name: str = "scrna-integration-r") -> str:
         f"请选择以下任一方式修复：\n"
         f"  a) 激活 conda R 环境后重跑 notebook：\n"
         f"     conda activate {r_env_name}\n"
-        f"  b) 如果环境尚未创建，使用项目提供的锁文件创建：\n"
-        f"     conda-lock install -n {r_env_name} "
-        f"conda-lock.{r_env_name}.yml\n"
+        f"  b) 如果环境尚未创建，使用项目提供的源 spec 创建：\n"
+        f"     conda env create -f environment-r.yml\n"
         f"  c) 如果环境名不是默认的 '{r_env_name}'，请传入正确的名称：\n"
         f"     from scrna_integration.platform import rscript_bin\n"
         f"     RSCRIPT_BIN = rscript_bin(r_env_name='你的环境名')\n"

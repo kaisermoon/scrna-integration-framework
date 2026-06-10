@@ -1,14 +1,14 @@
 # 跨平台对齐异常登记表
 
-> **ADR-0010**。本表登记**无法在 `linux-64` 与 `osx-arm64` 之间用 conda-lock 统一锁定同一版本**的包，及其回退方案。
+> **ADR-0010**。本表登记**无法在 `linux-64` 与 `osx-arm64` 之间用同一来源/版本对齐**的包，及其回退方案。
 >
-> **这是异常清单，不是常态。** 每新增一项，code-reviewer 必须质询「是否真的无法对齐」。目标：本表尽可能短乃至为空。两台机器的 conda 环境、包版本、代码函数行为应尽可能完全一致；只有 conda-lock 确实解不出跨平台同版本时，才允许在此登记最小切换。
+> **这是异常清单，不是常态。** 每新增一项，code-reviewer 必须质询「是否真的无法对齐」。目标：本表尽可能短乃至为空。两台机器的 conda 环境、包版本、代码函数行为应尽可能完全一致；只有确实无法跨平台用同一来源/版本对齐时，才允许在此登记最小切换。
 
-## 一、conda-lock 无法跨平台对齐的包
+## 一、无法跨平台用同一来源/版本对齐的包
 
 | 包 | 缺失平台 | 根因 | 回退方案 | 功能影响 | 登记日期 |
 |---|---|---|---|---|---|
-| `r-wgcna` | osx-arm64 | bioconda 仅发布 linux-64 build，osx-arm64 无包；放进 environment-r.yml conda 层会让 conda-lock 解 Mac 失败 | 不进 conda，改在 R 内 `install.packages("WGCNA")`（CRAN 两平台都有，源码编译，依赖 `compilers` 元包）。归入第二类统一管理 | stage7 hdWGCNA 依赖 WGCNA；R 内装后两平台一致 | 2026-06-10 |
+| `r-wgcna` | osx-arm64 | bioconda 仅发布 linux-64 build，osx-arm64 无包；放进 environment-r.yml conda 层会让 Mac 求解失败 | 不进 conda，改在 R 内 `install.packages("WGCNA")`（CRAN 两平台都有，源码编译，依赖 `compilers` 元包）。归入第二类统一管理 | stage7 hdWGCNA 依赖 WGCNA；R 内装后两平台一致 | 2026-06-10 |
 
 > **本机 Linux 当前偏差**：2026-06-10 首次重建时 operator 用 `bioconda r-wgcna=1.74` 装进了 `scrna-integration-r`（因 linux-64 有包）。Mac 无此 build，故规范改为两平台统一走 CRAN R 内装。本机 Linux 的 conda r-wgcna 1.74 暂留可用，**PR-X3 双机对齐时改为 R 内装以与 Mac 一致**（或确认 CRAN 版本与 1.74 一致即不动）。
 
@@ -48,4 +48,4 @@
 
 ---
 
-**维护规则**：本表随 conda-lock 重生成与 Linux 实测更新；reviewer 审 env/平台相关 PR 时核对本表与实际 lock/代码一致。
+**维护规则**：本表随 env_parity 快照对比更新与 Linux 实测更新；reviewer 审 env/平台相关 PR 时核对本表与实际快照/代码一致。

@@ -1,14 +1,16 @@
 # scrna-integration —— Python 主环境源 spec（跨平台一致性，ADR-0010）
 #
-# 本文件是「想要什么版本」的真相源，版本以 Mac（osx-arm64）已验证环境为准（2026-06-09 导出）。
-# 真实安装走 conda-lock 锁文件（conda-py.lock.yml），不要用 `conda env create -f` 直接 solve。
+# 本文件是「期望版本基准」的真相源，版本以 Mac（osx-arm64）已验证环境为准（2026-06-09 导出）。
+# 安装方式：conda env create -f environment.yml（或 mamba）。
+# 精确 pin（==）已尽量保证两机装出版本一致；装好后跑 `python scripts/env_parity.py snapshot` 留快照，
+# 换机时用 `compare` 对差异，人工决定对齐。
 #
-#   首次/重建：  conda-lock install --name scrna-integration conda-py.lock.yml
-#   新增/升级包：改本文件 → conda-lock -f environment.yml -p linux-64 -p osx-arm64 \
-#                          --lockfile conda-py.lock.yml → 提交 lock → 两机重装
+#   首次安装：  conda env create -f environment.yml
+#   新增/升级包：改本文件 → conda install -n scrna-integration <pkg>==<version>
+#               → 重跑 `python scripts/env_parity.py snapshot` 更新快照
 #
 # conda 层锁 python + pip + rpy2；其余科学栈走 pip。
-# 平台专属基础库（libcxx 等）交给 conda-lock 按平台求解，不在此手动 pin。
+# 平台专属基础库（libcxx 等）交给 conda 按平台求解，不在此手动 pin。
 #
 # rpy2 为何走 conda 不走 pip（2026-06-10 Linux 实测定）：
 #   pip 装 rpy2 需在本机编译并链接 R 共享库；Linux 上 pip rpy2 链接失败（找不到匹配的 R
