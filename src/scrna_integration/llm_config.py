@@ -48,7 +48,12 @@ def _parse_dotenv(env_path: str | Path) -> dict[str, str]:
     规则：
     - 跳过空行和 ``#`` 开头的注释行
     - 解析 ``KEY=VALUE``，去除两端空格
-    - VALUE 两端双引号自动剥除
+    - VALUE 两端引号（单引号或双引号）自动剥除
+    - 行内 `` #`` 注释剥离（引号内的 ``#`` 受保护）
+
+    处理顺序：先判断值是否被引号整体包裹——若被包裹则剥引号后
+    ``#`` 属于值的一部分，不剥离；若未被包裹则先剥行内注释，再检查
+    剩余部分是否被引号包裹。这样 ``KEY="a#b"`` → ``a#b`` 不会误伤。
     """
     result: dict[str, str] = {}
     with open(env_path, "r", encoding="utf-8") as f:
@@ -61,8 +66,16 @@ def _parse_dotenv(env_path: str | Path) -> dict[str, str]:
             key, _, value = line.partition("=")
             key = key.strip()
             value = value.strip()
-            if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+            # 若值整体被引号包裹（双引号或单引号），剥引号后 # 是值的一部分
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
                 value = value[1:-1]
+            else:
+                # 未被引号整体包裹 → 行内 # 视为注释起始
+                # 用 " #"（空格+#）分隔，避免误伤值内的 # 字符
+                value = value.split(" #")[0].rstrip()
+                # 剥注释后残留空格可能使值重新被引号包裹（如 KEY='val' # cmt）
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+                    value = value[1:-1]
             result[key] = value
     return result
 

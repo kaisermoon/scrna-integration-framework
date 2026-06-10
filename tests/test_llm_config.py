@@ -56,6 +56,20 @@ class TestParseDotenv:
         # "  line2" has no "=" so it's silently skipped
         assert result == {"KEY": "line1"}
 
+    def test_single_quoted_value_strips_quotes(self, tmp_path):
+        """Single-quoted values like KEY='value' should be stripped."""
+        p = tmp_path / ".env"
+        p.write_text("KEY='value'\n")
+        result = _parse_dotenv(str(p))
+        assert result == {"KEY": "value"}
+
+    def test_inline_comment_ignored(self, tmp_path):
+        """Inline # after space is treated as comment; # inside quotes is preserved."""
+        p = tmp_path / ".env"
+        p.write_text('KEY1=value # comment\nKEY2="a#b"\n')
+        result = _parse_dotenv(str(p))
+        assert result == {"KEY1": "value", "KEY2": "a#b"}
+
 
 # ---------------------------------------------------------------------------
 # _find_vault_root
@@ -162,6 +176,19 @@ class TestLoadGroupConfig:
         )
         cfg = load_llm_group_config(project_root=str(tmp_path))
         assert cfg["api_key"] == "sk-test123"
+
+    def test_non_numeric_default_group_fallback(self, tmp_path):
+        """Non-numeric LLM_DEFAULT_GROUP falls back to group 1 gracefully."""
+        env = tmp_path / ".env"
+        env.write_text(
+            "LLM_DEFAULT_GROUP=abc\n"
+            "LLM_GROUP1_PROVIDER=anthropic\n"
+            "LLM_GROUP1_BASE_URL=http://127.0.0.1:8082\n"
+        )
+        cfg = load_llm_group_config(project_root=str(tmp_path))
+        assert cfg is not None
+        assert cfg["group"] == 1  # fallback to group 1
+        assert cfg["provider"] == "anthropic"
 
 
 class TestGetActiveGroups:
