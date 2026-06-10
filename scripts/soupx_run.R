@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript --vanilla
 # soupx_run.R — SoupX 环境 RNA 校正（去除 ambient RNA 污染）
 #
-# 用法（由 stage2 notebook subprocess 调用）:
+# 用法（由 02 notebook subprocess 调用）:
 #   Rscript --vanilla scripts/soupx_run.R <work_dir> <filtered_mtx_dir> <raw_mtx_dir> <sample_id>
 #
 # 参数:

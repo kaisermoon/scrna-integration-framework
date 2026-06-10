@@ -8,9 +8,9 @@ Implementation details for the scRNA-seq Integration Framework. Companion to `CO
 
 **The framework is a tool for biological discovery, not a methods contribution.** Its purpose is to enable PI and students to produce publishable biological findings across disease projects (gastric precancerous lesions, RA, PCOS, VVC, ...) — not to publish a software paper or release a community library. This framing rules out the design pressures that come with public-tool ambitions (broad API stability, exhaustive docs, generic extensibility).
 
-**Stage 1 (current)**: Personal research infrastructure. Primary users are PI and supervised students. API may iterate aggressively; no public stability guarantees; lean docs. Function signatures may change between PRs during this stage — each signature change is logged in `_memory.md` so future readers can trace when an API shifted.
+**01 (current)**: Personal research infrastructure. Primary users are PI and supervised students. API may iterate aggressively; no public stability guarantees; lean docs. Function signatures may change between PRs during this stage — each signature change is logged in `_memory.md` so future readers can trace when an API shifted.
 
-**Stage 2 (later)**: Re-evaluated when the framework has produced **at least one publishable biological finding from the GCPL pilot** (PR-4 complete + a stage 7 downstream module completes a real analysis). What "Stage 2" means at that point is decided then — it is not committed in advance to be a software paper, a public release, or any specific external deliverable.
+**02 (later)**: Re-evaluated when the framework has produced **at least one publishable biological finding from the GCPL pilot** (PR-4 complete + a 07 downstream module completes a real analysis). What "02" means at that point is decided then — it is not committed in advance to be a software paper, a public release, or any specific external deliverable.
 
 ### Engineering discipline from day one
 
@@ -92,8 +92,8 @@ The genuine IO gap: scanpy's readers don't unify cross-source obs schemas, don't
 8. **Species enforcement**: requires `species` field in manifest (currently only `"human"` accepted; other species fail loudly). Writes `adata.uns["species"] = "human"` so downstream stages can verify before loading species-specific markers / references.
 9. **Disease system propagation**: copies the manifest's top-level `disease_system` field to `obs.disease_system` (Layer 1 required field) for every cell. Cross-project integration analyses across PI's portfolio (gastric / RA / PCOS / VVC) rely on this column.
 10. **Layer 2 strong-warn + LLM best-effort fix**: for each of the seven CellxGene-aligned fields (`disease`, `disease_ontology_term_id`, `tissue`, `tissue_ontology_term_id`, `assay`, `sex`, `development_stage`) that is missing or malformed, emits a strong warning and invokes an LLM-assisted disambiguator (looking at obs head + manifest + clinical-metadata head) to propose a value. PI confirms in-notebook; confirmed fixes are written back into `manifest.yaml` for reproducibility.
-11. **Records (does not load) raw matrix path** for SoupX: if manifest provides `input.raw_path`, writes it to `adata.uns["raw_matrix_path"]`. Stage 2 SoupX reads it on demand to avoid doubling stage 1 memory.
-12. Computes baseline QC metrics (`n_genes`, `total_counts`, `pct_counts_mt`, `pct_counts_ribo`) on `adata.X` so they are present and column-aligned across all source datasets regardless of preprocessing state. These are stage-2 prerequisites; computing them at ingest avoids a missing-column branch at stage 2.
+11. **Records (does not load) raw matrix path** for SoupX: if manifest provides `input.raw_path`, writes it to `adata.uns["raw_matrix_path"]`. 02 SoupX reads it on demand to avoid doubling 01 memory.
+12. Computes baseline QC metrics (`n_genes`, `total_counts`, `pct_counts_mt`, `pct_counts_ribo`) on `adata.X` so they are present and column-aligned across all source datasets regardless of preprocessing state. These are 02 prerequisites; computing them at ingest avoids a missing-column branch at 02.
 13. Returns plain `AnnData`. **Caller does anything they want next** — `adata.write_h5ad(...)` to checkpoint, scanpy ops to continue, etc.
 
 The function is one file (`src/scrna_integration/io.py`) + minimal helpers. It does **not** call `validate_obs`, does **not** push metadata into a hidden namespace beyond `species` / `raw_matrix_path`, does **not** assign a "stage" tag. PI inspects obs after reading and decides whether the schema is OK.
@@ -110,7 +110,7 @@ from scrna_integration.scorers import integration_metrics, clustering_metrics
 
 **Explicit for-loop pattern** (replaces the removed `sweep()` function — ADR-0009):
 ```python
-# Stage 4: iterate embeddings, compute metrics directly
+# 04: iterate embeddings, compute metrics directly
 results = []
 for rep in use_reps:
     adata_copy = adata.copy()
@@ -121,7 +121,7 @@ for rep in use_reps:
 import pandas as pd; sweep_df = pd.DataFrame(results)
 ```
 
-Stage 5 uses the same pattern with `clustering_metrics` across resolutions.
+05 uses the same pattern with `clustering_metrics` across resolutions.
 
 Available scorer functions:
 - `integration_metrics(adata, batch_key="batch", label_key=None)` — silhouette by batch + celltype
@@ -134,7 +134,7 @@ scib-metrics is optional — `scib_available` = 0.0 when not installed.
 
 ### `load_markers(csv_path, roles=("canonical", "optional")) -> dict`
 
-A marker-library loader for the `references/markers/*.csv` corpus. Justified per ADR-0005: PI's accumulated experience confirms the load + filter + groupby boilerplate appears in stage 6 annotation, per-cluster profiling, and downstream gene-set scoring notebooks; centralising the `role` semantics (`canonical` / `optional` / `negative`) prevents misuse.
+A marker-library loader for the `references/markers/*.csv` corpus. Justified per ADR-0005: PI's accumulated experience confirms the load + filter + groupby boilerplate appears in 06 annotation, per-cluster profiling, and downstream gene-set scoring notebooks; centralising the `role` semantics (`canonical` / `optional` / `negative`) prevents misuse.
 
 ```python
 def load_markers(
@@ -168,50 +168,50 @@ The pipeline is a **file-naming convention**, not a framework feature. There is 
 
 ```
 stage 0    raw/                                          external raw data (cellranger / h5ad / RData), read-only
-stage 1    results/{project}_stage1_loaded_v{N}.h5ad     ingest + obs schema (read_with_manifest)
-stage 2    results/{project}_stage2_qcd_v{N}.h5ad        QC + filter + doublet (scrublet) + ambient (SoupX)
-stage 3    results/{project}_stage3_normalized_v{N}.h5ad normalize + log + HVG
-stage 4    results/{project}_stage4_embedded_v{N}.h5ad   PCA / Harmony / scVI / scANVI (sweep + integration QC inline)
-stage 5    results/{project}_stage5_clustered_v{N}.h5ad  multi-resolution Leiden
-stage 6    results/{project}_stage6_annotated_v{N}.h5ad  multi-method annotation + cross-method comparison
-stage 6.5  results/{project}_stage6_5_subset_v{N}.h5ad   subset re-cluster (re-run stage 3-5 on a subset; e.g. all T cells)
-stage 7    results/downstream/{module}_v{N}.h5ad         downstream modules (one h5ad per module, see below)
+01    results/{project}_01_loaded_v{N}.h5ad     ingest + obs schema (read_with_manifest)
+02    results/{project}_02_qcd_v{N}.h5ad        QC + filter + doublet (scrublet) + ambient (SoupX)
+03    results/{project}_03_normalized_v{N}.h5ad normalize + log + HVG
+04    results/{project}_04_embedded_v{N}.h5ad   PCA / Harmony / scVI / scANVI (sweep + integration QC inline)
+05    results/{project}_05_clustered_v{N}.h5ad  multi-resolution Leiden
+06    results/{project}_06_annotated_v{N}.h5ad  multi-method annotation + cross-method comparison
+06c  results/{project}_06c_subset_v{N}.h5ad   subset re-cluster (re-run 03-5 on a subset; e.g. all T cells)
+07    results/downstream/{module}_v{N}.h5ad         downstream modules (one h5ad per module, see below)
 ```
 
-### Stage 4 sweep includes integration QC
+### 04 sweep includes integration QC
 
 No embedding method is best on every dataset, so the workflow is to **run all candidates, then compare** — never to pick a default method up front. Candidates are peers: `X_pca` (baseline), `X_pca_harmony`, `X_scVI`, `X_scANVI` (when a labelled reference exists), cellxgene_census pretrained scVI (optional), and any future method PI adds (e.g. scPoli / scArches-family methods). Each writes its own `obsm` slot; none is privileged.
 
 Two decision inputs, both first-class:
 
 1. **Visual inspection (primary in PI's actual workflow)** — `sc.pl.umap` for every candidate embedding, coloured by `sample_id`, `batch`, and `cell_type` (original-author or marker-based). PI eyeballs how well each integrates batches without over-mixing biologically distinct cells. This visual read is the main basis for the decision, not a formality.
-2. **Integration metrics** — batch entropy / iLISI / scIB suite (silhouette by batch / silhouette by celltype / kBET / graph connectivity / etc.), embedded in the stage 4 sweep report via `sweep(fn=embedding_method, ..., scorer=integration_metrics)`. The metric table corroborates or complicates the visual read.
+2. **Integration metrics** — batch entropy / iLISI / scIB suite (silhouette by batch / silhouette by celltype / kBET / graph connectivity / etc.), embedded in the 04 sweep report via `sweep(fn=embedding_method, ..., scorer=integration_metrics)`. The metric table corroborates or complicates the visual read.
 
 PI weighs both and marks one embedding `promoted`. cellxgene_census pretrained scVI and scANVI are optional candidate cells (each with its prerequisite noted — census model coverage for the tissue / a labelled reference atlas respectively), not framework-prescribed steps.
 
-**Adding an embedding method (extension pattern).** Same scanpy-native "parallel slots" mechanism as stage-5 clustering: a new method writes `adata.obsm["X_{method}"]` and is appended to the stage-4 notebook's `use_reps` list in the explicit for loop — one added cell, no framework change. This is how PI plugs in new integration methods as they are published.
+**Adding an embedding method (extension pattern).** Same scanpy-native "parallel slots" mechanism as 05 clustering: a new method writes `adata.obsm["X_{method}"]` and is appended to the 04 notebook's `use_reps` list in the explicit for loop — one added cell, no framework change. This is how PI plugs in new integration methods as they are published.
 
-### Stage 6.5 subset analysis
+### 06c subset analysis
 
-After stage 6 PI may want to refine a specific cell-type subset (all T cells, all epithelial cells, all SPEM-spectrum cells, ...). Stage 6.5 re-runs stage 3 (HVG re-selection on the subset) → stage 4 (re-embedding) → stage 5 (re-clustering) → stage 6 (re-annotation) on the subset. Output goes to `stage6_5_subset_v{N}.h5ad` with `adata.uns["subset_of"] = "results/gcpl_stage6_annotated_v1.h5ad"` and `adata.uns["subset_filter"] = "cell_type_final_v1.isin(['CD4 T', 'CD8 T', 'Treg'])"` for traceability.
+After 06 PI may want to refine a specific cell-type subset (all T cells, all epithelial cells, all SPEM-spectrum cells, ...). 06c re-runs 03 (HVG re-selection on the subset) → 04 (re-embedding) → 05 (re-clustering) → 06 (re-annotation) on the subset. Output goes to `06c_subset_v{N}.h5ad` with `adata.uns["subset_of"] = "results/gcpl_06_annotated_v1.h5ad"` and `adata.uns["subset_filter"] = "cell_type_final_v1.isin(['CD4 T', 'CD8 T', 'Treg'])"` for traceability.
 
-Stage 6.5 is implemented as a single notebook (`stage6_5_subset.ipynb`) that calls the same scanpy / framework API as stages 3-6 on the subset. Re-clustering parameters are project-specific (the T-cell subset usually needs different HVG / resolution than the global UMAP).
+06c is implemented as a single notebook (`06c_subset.ipynb`) that calls the same scanpy / framework API as stages 3-6 on the subset. Re-clustering parameters are project-specific (the T-cell subset usually needs different HVG / resolution than the global UMAP).
 
-### Stage 7 downstream modules
+### 07 downstream modules
 
-Stage 7 is a fan-out — multiple downstream modules consume stage 6 (or stage 6.5) output independently and run in parallel. Each module has its own h5ad and its own notebook:
+07 is a fan-out — multiple downstream modules consume 06 (or 06c) output independently and run in parallel. Each module has its own h5ad and its own notebook:
 
 | Module | Notebook | Tool stack | Status | Student-code reference (re-implement per ADR-0008) |
 |---|---|---|---|---|
-| Differential expression (per-cluster, scanpy native) | `notebooks/stage7/deg.ipynb` | `sc.tl.rank_genes_groups` | **PR-3 in scope** | legacy-GCPL `08_differential_expression.ipynb` |
-| Pseudobulk DEG (cross-condition: disease vs control) | `notebooks/stage7/pseudobulk_deg.ipynb` | DESeq2 (subprocess Rscript) | **PR-3 in scope** | — (decoupler pseudobulk + DESeq2 contrast) |
-| CNV inference | `notebooks/stage7/cnv.ipynb` | infercnvpy (pure Python) | **PR-3 in scope** | `workflow_for_pseudotime/4.2_*` (gene positions) + `4.3_*` (infercnvpy run) |
-| Pathway enrichment | `notebooks/stage7/pathway.ipynb` | GSEApy / decoupler / Reactome | PR-5+ | CD4 deep-analysis template GSEA part (reference only) |
-| Pseudotime + root identification | `notebooks/stage7/pseudotime.ipynb` | CytoTRACE (cellrank) / Monocle3 (Rscript) / transcriptome entropy (numpy) | PR-5+ | `4.3_*` (entropy/CytoTRACE/Monocle3 export) + `4.4_*`/`4.5_*` (multi-metric root id) + `11.2_*` (lineage Monocle3) |
-| GRN | `notebooks/stage7/grn.ipynb` | pySCENIC | PR-5+ | — |
-| Cell communication | `notebooks/stage7/cell_communication.ipynb` | CellChat / NicheNet / CellPhoneDB | PR-5+ | CD4 deep-analysis LR part (reference only) |
-| Differential abundance | `notebooks/stage7/abundance.ipynb` | scCODA / Milo | PR-5+ | `11_all_celltype_proportion_analyse.ipynb` (scCODA + Mann-Whitney + Cliff's delta + effect sizes) |
-| Gene co-expression modules | `notebooks/stage7/gene_modules.ipynb` | hdWGCNA (subprocess Rscript) | PR-5+ | — |
+| Differential expression (per-cluster, scanpy native) | `notebooks/07_downstream/deg.ipynb` | `sc.tl.rank_genes_groups` | **PR-3 in scope** | legacy-GCPL `08_differential_expression.ipynb` |
+| Pseudobulk DEG (cross-condition: disease vs control) | `notebooks/07_downstream/pseudobulk_deg.ipynb` | DESeq2 (subprocess Rscript) | **PR-3 in scope** | — (decoupler pseudobulk + DESeq2 contrast) |
+| CNV inference | `notebooks/07_downstream/cnv.ipynb` | infercnvpy (pure Python) | **PR-3 in scope** | `workflow_for_pseudotime/4.2_*` (gene positions) + `4.3_*` (infercnvpy run) |
+| Pathway enrichment | `notebooks/07_downstream/pathway.ipynb` | GSEApy / decoupler / Reactome | PR-5+ | CD4 deep-analysis template GSEA part (reference only) |
+| Pseudotime + root identification | `notebooks/07_downstream/pseudotime.ipynb` | CytoTRACE (cellrank) / Monocle3 (Rscript) / transcriptome entropy (numpy) | PR-5+ | `4.3_*` (entropy/CytoTRACE/Monocle3 export) + `4.4_*`/`4.5_*` (multi-metric root id) + `11.2_*` (lineage Monocle3) |
+| GRN | `notebooks/07_downstream/grn.ipynb` | pySCENIC | PR-5+ | — |
+| Cell communication | `notebooks/07_downstream/cell_communication.ipynb` | CellChat / NicheNet / CellPhoneDB | PR-5+ | CD4 deep-analysis LR part (reference only) |
+| Differential abundance | `notebooks/07_downstream/abundance.ipynb` | scCODA / Milo | PR-5+ | `11_all_celltype_proportion_analyse.ipynb` (scCODA + Mann-Whitney + Cliff's delta + effect sizes) |
+| Gene co-expression modules | `notebooks/07_downstream/gene_modules.ipynb` | hdWGCNA (subprocess Rscript) | PR-5+ | — |
 
 The 3 modules in PR-3 scope (DEG / pseudobulk DEG / CNV) form the **minimum set needed to reach the GCPL pilot's first biological finding** — distinguishing tumor vs normal cells, finding genes differential along the CAG → IM → dysplasia axis, and identifying disease-vs-control pseudobulk DEGs. The remaining 6 modules are added in subsequent PRs as the GCPL analysis surfaces specific scientific questions.
 
@@ -223,11 +223,11 @@ A re-run writes its own provenance directly into `adata.uns`:
 
 ```python
 adata.uns["status"] = "promoted"          # or "experimental" / "deprecated"
-adata.uns["upstream"] = ["results/gcpl_stage3_normalized_v1.h5ad"]
+adata.uns["upstream"] = ["results/gcpl_03_normalized_v1.h5ad"]
 adata.uns["notes"] = "tried scVI in place of Harmony; not promoted"
 ```
 
-PI inspects these dict entries directly. There is no API for `promote()` / `deprecate()` / `show_dependents()`. When PI wants to know "what depends on stage4_v1", they `glob` over `results/` and read each file's `adata.uns["upstream"]`.
+PI inspects these dict entries directly. There is no API for `promote()` / `deprecate()` / `show_dependents()`. When PI wants to know "what depends on 04_v1", they `glob` over `results/` and read each file's `adata.uns["upstream"]`.
 
 ### Default upstream selection
 
@@ -235,7 +235,7 @@ There is no automatic default. Every notebook has a parameters cell where the up
 
 ```python
 # === PARAMS ===
-upstream_path = "results/gcpl_stage3_normalized_v1.h5ad"
+upstream_path = "results/gcpl_03_normalized_v1.h5ad"
 output_version = 2
 ```
 
@@ -264,7 +264,7 @@ adata.uns["filter_v1"] = {
 }
 ```
 
-**Example 2 — recording a Harmony embedding run** at stage 4:
+**Example 2 — recording a Harmony embedding run** at 04:
 
 ```python
 sce.pp.harmony_integrate(adata, key="batch")
@@ -278,7 +278,7 @@ adata.uns["harmony_v1"] = {
 }
 ```
 
-**Example 3 — recording PI's `cell_type_final` decision** at stage 6:
+**Example 3 — recording PI's `cell_type_final` decision** at 06:
 
 ```python
 adata.obs["cell_type_final_v1"] = adata.obs["leiden_res_1.0"].map(pi_decisions)
@@ -331,7 +331,7 @@ All seven fields trigger a **strong warning** when missing or malformed at IO ti
 This applies uniformly to all seven fields rather than only the most-used ones, because each Layer 2 field is heavily used in at least one downstream stage:
 
 - `disease` / `disease_ontology_term_id` — primary disease grouping in cross-condition DEG, abundance analysis, ontology-aware aggregation
-- `tissue` / `tissue_ontology_term_id` — tissue-aware marker selection, stage 6 annotation, cross-tissue comparison
+- `tissue` / `tissue_ontology_term_id` — tissue-aware marker selection, 06 annotation, cross-tissue comparison
 - `assay` — technical batch source for Harmony / scVI / integration QC
 - `sex` — common confounder in cross-condition analyses across all disease systems
 - `development_stage` — needed when comparing pediatric / adult / aged cohorts; relevant in PCOS (premenopausal vs postmenopausal) and gastric (age-correlated SPEM frequency)
@@ -383,8 +383,8 @@ input:
   format: "10x_mtx"            # 10x_mtx | h5ad | h5 | rds
   path: "filtered_feature_bc_matrix"
   raw_path: "raw_feature_bc_matrix"   # OPTIONAL; if present, written to adata.uns["raw_matrix_path"]
-                                      # for stage 2 SoupX. Stage 1 does NOT load it (avoids 2x memory).
-                                      # Absent → SoupX skipped at stage 2.
+                                      # for 02 SoupX. 01 does NOT load it (avoids 2x memory).
+                                      # Absent → SoupX skipped at 02.
   gene_id_format: "symbol"     # OPTIONAL; symbol | ensembl | auto (default auto)
                                # Hint to read_with_manifest about var.index format.
                                # In auto mode, framework detects format from var.index pattern.
@@ -480,11 +480,11 @@ R interoperability is unavoidable, but the mechanism is unified: **all R tools u
 
 1. **Pure Python, no R** — InferCNV (`infercnvpy`: `cnv.tl.infercnv` / `cnv.tl.cnv_score`) and CytoTRACE (`cellrank` `CytoTRACEKernel`). These have mature Python packages validated in `student-code`; do not reach for R.
 2. **subprocess `Rscript` + temp files** — SoupX, Monocle3, UCell, DESeq2, hdWGCNA, and all other R tools. Write `.mtx`/`.csv`, call `subprocess.run(["Rscript", "--vanilla", ...])`, read results back. Process isolation is robust; each `.R` script is independently debuggable; this is the pattern `student-code` actually uses throughout.
-3. **rpy2 `%%R` in-notebook** — **Removed (2026-06-09)**. Formerly used for SoupX at stage 2. rpy2 + anndata2ri was infeasible in conda R 4.4.3 (`R_getVar` symbol missing); PI decision B moved SoupX to subprocess Rscript, unifying all R tools under one bridge mechanism.
+3. **rpy2 `%%R` in-notebook** — **Removed (2026-06-09)**. Formerly used for SoupX at 02. rpy2 + anndata2ri was infeasible in conda R 4.4.3 (`R_getVar` symbol missing); PI decision B moved SoupX to subprocess Rscript, unifying all R tools under one bridge mechanism.
 
 The only framework-side R concession is that `read_with_manifest` handles `format: "rds"` internally (otherwise every IO call site needs rpy2 ceremony just to read a Seurat object). All other R access follows the subprocess pattern above, written directly in notebooks.
 
-### SoupX subprocess pattern (stage 2 ambient correction)
+### SoupX subprocess pattern (02 ambient correction)
 
 See `scripts/soupx_run.R` for the standalone R script. The notebook pattern:
 
@@ -499,7 +499,7 @@ subprocess.run(["Rscript", "--vanilla", "scripts/soupx_run.R",
 
 The `.R` script (`SoupChannel` → `autoEstCont` → `adjustCounts` → write corrected `.mtx`) is a standalone file in `scripts/`, independently runnable and debuggable outside the notebook.
 
-### Concrete example — SoupX (stage 2 ambient correction, subprocess Rscript)
+### Concrete example — SoupX (02 ambient correction, subprocess Rscript)
 
 ```python
 # Cell A: R 环境守卫——检查 Rscript 可执行 + SoupX R 包可加载
@@ -523,7 +523,7 @@ adata[cell_ids].X = sp.csr_matrix(corrected.T)
 adata.obs.loc[cell_ids, "ambient_correction_applied"] = True
 ```
 
-### Concrete example — Monocle3 (stage 7 pseudotime, subprocess Rscript)
+### Concrete example — Monocle3 (10 pseudotime, subprocess Rscript)
 
 Heavy R tools use subprocess + temp files (ADR-0007), the pattern validated in `student-code/workflow_for_pseudotime/4.3_*.py`:
 
@@ -549,7 +549,7 @@ adata.obs["pseudotime_monocle3_v1"] = pt["pseudotime"].reindex(adata.obs_names)
 
 The `.R` script (`new_cell_data_set` → `preprocess_cds` → `reduce_dimension` → `cluster_cells` → `learn_graph` → `order_cells` → write `pseudotime.csv` + save plots) is a standalone file, independently runnable and debuggable outside the notebook.
 
-### Concrete example — pseudobulk DESeq2 (stage 7 cross-condition DEG, subprocess Rscript)
+### Concrete example — pseudobulk DESeq2 (08 pseudobulk DEG, subprocess Rscript)
 
 ```python
 # Cell A: pseudobulk in Python (sample-level aggregation)
@@ -582,7 +582,7 @@ The `.R` script wraps `DESeqDataSetFromMatrix` → `DESeq` → `results(contrast
 
 ### rpy2: removed from the pipeline
 
-rpy2 was formerly used only for SoupX at stage 2. The 2026-06-09 ADR-0007 revision reclassified SoupX to subprocess Rscript after rpy2 + anndata2ri proved infeasible in conda R 4.4.3 (`R_getVar` symbol missing). The rpy2 dependency is no longer needed for any stage. `read_with_manifest` retains rpy2 internally for `format: "rds"` (Seurat object reading), but this is the only remaining rpy2 call site in the codebase.
+rpy2 was formerly used only for SoupX at 02. The 2026-06-09 ADR-0007 revision reclassified SoupX to subprocess Rscript after rpy2 + anndata2ri proved infeasible in conda R 4.4.3 (`R_getVar` symbol missing). The rpy2 dependency is no longer needed for any stage. `read_with_manifest` retains rpy2 internally for `format: "rds"` (Seurat object reading), but this is the only remaining rpy2 call site in the codebase.
 
 ### Environment management
 
@@ -688,9 +688,9 @@ The following long-term-asset categories were considered and rejected:
 
 | Considered | Rejected because |
 |---|---|
-| `references/cell_type_ontology/{system}.yaml` (cell type hierarchy) | LLM in stage 6 cross-method comparison already handles `"T cell"` vs `"CD8+ Tem"` semantic alignment without an explicit ontology. Maintaining a parallel cell type hierarchy adds cost without observed benefit. |
+| `references/cell_type_ontology/{system}.yaml` (cell type hierarchy) | LLM in 06 cross-method comparison already handles `"T cell"` vs `"CD8+ Tem"` semantic alignment without an explicit ontology. Maintaining a parallel cell type hierarchy adds cost without observed benefit. |
 | `references/genesets/` (gene set library) | GSEApy / decoupler ship MSigDB / KEGG / Reactome built-in. Project-specific gene sets (e.g. SPEM transition signature) are best stored where they're used — in the relevant analysis notebook or per-project data dir — not promoted to a framework-wide library. |
-| `references/embeddings/` (cellxgene_census ref metadata) | Stage 4 notebooks call `cellxgene_census` API directly with hard-coded metadata. Locally archiving model versions adds maintenance without solving a real problem. |
+| `references/embeddings/` (cellxgene_census ref metadata) | 04 notebooks call `cellxgene_census` API directly with hard-coded metadata. Locally archiving model versions adds maintenance without solving a real problem. |
 | `references/prompts/` (LLM verdict / annotation prompts) | Per-stage LLM prompts live in the stage notebook scripts directly. Centralising them creates a sync burden between notebook and prompt file with no clear advantage. |
 
 The decision rule for adding a third asset category to `references/` mirrors ADR-0001 / 0003 / 0004: a candidate must demonstrate observed real-world benefit (not anticipated convenience) and a new ADR before being added.
@@ -702,7 +702,7 @@ The decision rule for adding a third asset category to `references/` mirrors ADR
 Some source datasets ship pre-filtered (Tsubosaka, Nowicki-Osuch, Kim) — re-running scrublet / SoupX on already-cleaned data is a scientific error. Manifest declares preprocessing state via `preprocessing_done` and per-step `qc_overrides`. PI's QC notebook then **skips** matching steps based on the manifest dict — the notebook reads the manifest, branches on each step, runs scanpy QC functions where applicable.
 
 ```python
-# In stage 2 QC notebook
+# In 02 QC notebook
 manifest = yaml.safe_load(open(f"data/{source_dataset}/manifest.yaml"))
 preprocessing_done = manifest.get("preprocessing_done", [])
 qc_overrides = manifest.get("qc_overrides", {})
@@ -715,13 +715,13 @@ else:
     adata.obs["predicted_doublet"] = False
 ```
 
-The framework does **not** ship a `qc_runner` function. The stage 2 notebook (`stage2_qcd.ipynb`) contains the branch logic above directly; PI edits PARAMS at the top and runs.
+The framework does **not** ship a `qc_runner` function. The 02 notebook (`02_qcd.ipynb`) contains the branch logic above directly; PI edits PARAMS at the top and runs.
 
 ### Column alignment
 
 For final cross-dataset analyses to work, QC-derived obs columns must be present and aligned across all integrated cells:
 
-- `obs.n_genes`, `obs.total_counts`, `obs.pct_counts_mt`, `obs.pct_counts_ribo` — always recomputed from `adata.X` regardless of preprocessing state. The stage 2 notebook includes these computations.
+- `obs.n_genes`, `obs.total_counts`, `obs.pct_counts_mt`, `obs.pct_counts_ribo` — always recomputed from `adata.X` regardless of preprocessing state. The 02 notebook includes these computations.
 - `obs.doublet_score`, `obs.predicted_doublet` — present as columns; **NaN** on cells where doublet detection was skipped (encodes "not applicable", not "missing data").
 - `obs.ambient_correction_applied` (bool) — true on cells where ambient correction ran; false elsewhere.
 
@@ -729,15 +729,15 @@ PI reads these conventions in the stage notebook and follows them.
 
 ### What the framework does NOT enforce
 
-PI explicitly accepts that QC heterogeneity propagates into stage 4-7 results — strict cross-dataset alignment was considered and rejected:
+PI explicitly accepts that QC heterogeneity propagates into 04-7 results — strict cross-dataset alignment was considered and rejected:
 
-- **Doublet alignment is NOT mandatory across datasets**. A dataset that ships already-doublet-removed (Tsubosaka, Nowicki, Kim) skips scrublet at stage 2; a raw cellranger dataset (Nancang) runs scrublet. The two datasets enter stage 3+ with different doublet histories. The framework does not force a "re-run scrublet on already-cleaned data to produce a comparable score" alignment step. PI accepts the resulting risk that Harmony/scVI batch correction at stage 4 may treat residual doublets in some datasets as `false batch effect`. Mitigation is a disclaimer in the stage 4 sweep report when `qc_heterogeneous=True`, not an alignment step.
+- **Doublet alignment is NOT mandatory across datasets**. A dataset that ships already-doublet-removed (Tsubosaka, Nowicki, Kim) skips scrublet at 02; a raw cellranger dataset (Nancang) runs scrublet. The two datasets enter 03+ with different doublet histories. The framework does not force a "re-run scrublet on already-cleaned data to produce a comparable score" alignment step. PI accepts the resulting risk that Harmony/scVI batch correction at 04 may treat residual doublets in some datasets as `false batch effect`. Mitigation is a disclaimer in the 04 sweep report when `qc_heterogeneous=True`, not an alignment step.
 - **Ambient correction is physically gated by data availability.** SoupX requires `input.raw_path` in the manifest (the cellranger raw_feature_bc_matrix). Datasets that ship only filtered matrices cannot run SoupX — there is no way to "force align". `obs.ambient_correction_applied` records the actual situation per dataset; downstream consumers read it.
-- **Stage 7 cross-condition DEG / pseudobulk** carries the same disclaimer. Pseudobulk averaging dilutes single-cell-level QC heterogeneity to some extent (multi-cell mean per sample), but cannot eliminate systematic bias when one cohort has been doublet-removed and another has not. PI accepts this risk for now; if it produces visibly biased DEG results in the GCPL pilot, alignment can be reconsidered as a per-project step.
+- **08 pseudobulk DEG / 10 pseudotime** carries the same disclaimer. Pseudobulk averaging dilutes single-cell-level QC heterogeneity to some extent (multi-cell mean per sample), but cannot eliminate systematic bias when one cohort has been doublet-removed and another has not. PI accepts this risk for now; if it produces visibly biased DEG results in the GCPL pilot, alignment can be reconsidered as a per-project step.
 
 ### Cross-method comparison reads QC context
 
-When stage 6 cross-method comparison includes original author annotations (`cell_type_original_{source_dataset}_v1`), the LLM verdict prompt is supplied with each source dataset's `qc_skipped` record so the LLM can interpret author labels in their proper QC context. For example, when comparing `cell_type_original_Tsubosaka_2023_v1 = "T cell"` (annotated on a doublet-removed matrix) against `cell_type_llm_v1 = "T cell + contaminated"` (annotated on a matrix that still contains doublets), the LLM should recognise the difference may be a QC artefact rather than a true biological disagreement. This is implemented in the `stage6_annotated.ipynb` LLM verdict prompt construction — not in framework code.
+When 06 cross-method comparison includes original author annotations (`cell_type_original_{source_dataset}_v1`), the LLM verdict prompt is supplied with each source dataset's `qc_skipped` record so the LLM can interpret author labels in their proper QC context. For example, when comparing `cell_type_original_Tsubosaka_2023_v1 = "T cell"` (annotated on a doublet-removed matrix) against `cell_type_llm_v1 = "T cell + contaminated"` (annotated on a matrix that still contains doublets), the LLM should recognise the difference may be a QC artefact rather than a true biological disagreement. This is implemented in the `06_annotated.ipynb` LLM verdict prompt construction — not in framework code.
 
 ---
 
@@ -836,9 +836,9 @@ Severity levels follow `code-reviewer` agent's standard verdict scale (block / r
 
 ---
 
-## Stage 6: Multi-method Annotation in the Notebook
+## 06: Multi-method Annotation in the Notebook
 
-Stage 6 is the most distinctive scientific layer of the framework, but it is implemented as a **notebook** (`stage6_annotated.ipynb`), not a framework module. Annotation methods run as **independent cells in the notebook** — PI is free to choose any execution order; the framework does not anchor "correct order" between manual marker annotation and the automatic methods. (Order experimentation is encouraged: running automatic methods first lets PI cross-check intuition, while running manual marker first preserves PI's prior judgement free of automatic-method anchoring.)
+06 is the most distinctive scientific layer of the framework, but it is implemented as a **notebook** (`06_annotated.ipynb`), not a framework module. Annotation methods run as **independent cells in the notebook** — PI is free to choose any execution order; the framework does not anchor "correct order" between manual marker annotation and the automatic methods. (Order experimentation is encouraged: running automatic methods first lets PI cross-check intuition, while running manual marker first preserves PI's prior judgement free of automatic-method anchoring.)
 
 **Running several methods in parallel is the point, not redundancy.** The most accurate per-cluster cell type comes from cross-comparing independent methods — agreement raises confidence, disagreement flags clusters needing PI attention. So the default is to run multiple methods together, not to pick one.
 
@@ -864,28 +864,28 @@ After the method cells run, the notebook constructs the cross-method comparison 
 7. **LLM verdict per cluster** — the notebook constructs a prompt containing all available method labels (including original-author annotations from `cell_type_original_*` if present), top markers from `sc.tl.rank_genes_groups`, gene-set score profile, marker_db coverage, and `adata.uns["qc_skipped"]` per source dataset. OpenRouter is called directly. The verdict for each cluster is written to a per-cluster markdown file.
 8. **PI reads every cluster's verdict and decides** — `obs.cell_type_final_v1` is set manually. With one integrated adata per project (per-project N is typically 15–30 leiden clusters), reading every verdict takes 30–60 minutes and is the standard workflow. There is no auto-pick by confidence threshold — every cluster's final label is PI's call.
 
-**There is no `si.report.stage6_annotation` function.** The notebook is the unit of work. When new annotation methods appear, PI / students add a cell to `stage6_annotated.ipynb` and rename the obs column following `cell_type_{method}_v{N}` naming.
+**There is no `si.report.06_annotation` function.** The notebook is the unit of work. When new annotation methods appear, PI / students add a cell to `06_annotated.ipynb` and rename the obs column following `cell_type_{method}_v{N}` naming.
 
 ### `cell_type_final_v{N}` versioning
 
-PI may revisit annotations weeks later (e.g. after seeing a stage 7 result that suggests refining cluster 7 from `SPEM` into `SPEM_complete` / `SPEM_incomplete`). Following the same convention as stage h5ad versioning, **the previous `cell_type_final_v{N}` column is never overwritten** — a new `cell_type_final_v2` column is added with the revised labels, and `adata.uns["cell_type_final_v2_notes"]` records the revision rationale. PI / agents reference whichever version is appropriate for the analysis at hand.
+PI may revisit annotations weeks later (e.g. after seeing a 07 result that suggests refining cluster 7 from `SPEM` into `SPEM_complete` / `SPEM_incomplete`). Following the same convention as stage h5ad versioning, **the previous `cell_type_final_v{N}` column is never overwritten** — a new `cell_type_final_v2` column is added with the revised labels, and `adata.uns["cell_type_final_v2_notes"]` records the revision rationale. PI / agents reference whichever version is appropriate for the analysis at hand.
 
-### Stage 6.5 subset re-annotation reflows back
+### 06c subset re-annotation reflows back
 
-When stage 6.5 produces refined sub-cluster annotations (e.g. CD4/CD8/Treg/MAIT from a T-cell subset re-clustering), the refined labels are reflowed into the main stage 6 adata as a new column `cell_type_final_subset_v1`. Cells in the refined subset receive the fine label; cells outside the subset (epithelial, stromal, etc.) receive `NaN` in this column. The original `cell_type_final_v1` column remains untouched. This preserves the granularity hierarchy (broad in `_final_v1`, fine in `_final_subset_v1`) without polluting either, and downstream stages can choose the column appropriate to their question.
+When 06c produces refined sub-cluster annotations (e.g. CD4/CD8/Treg/MAIT from a T-cell subset re-clustering), the refined labels are reflowed into the main 06 adata as a new column `cell_type_final_subset_v1`. Cells in the refined subset receive the fine label; cells outside the subset (epithelial, stromal, etc.) receive `NaN` in this column. The original `cell_type_final_v1` column remains untouched. This preserves the granularity hierarchy (broad in `_final_v1`, fine in `_final_subset_v1`) without polluting either, and downstream stages can choose the column appropriate to their question.
 
 ### Original author annotations
 
-Manifest's `original_annotations` section causes IO to rename author labels to `cell_type_original_{source_dataset}_v1[_{role}]`. After multi-source integration these columns are sparse (NaN on cells from datasets without that annotation). The stage 6 notebook treats them as additional methods in the cross-method comparison — the LLM verdict prompt naturally references them when present and reads `adata.uns["qc_skipped"]` so the LLM can interpret author labels in their proper QC context (see "Cross-method comparison reads QC context" in the QC Heterogeneity section).
+Manifest's `original_annotations` section causes IO to rename author labels to `cell_type_original_{source_dataset}_v1[_{role}]`. After multi-source integration these columns are sparse (NaN on cells from datasets without that annotation). The 06 notebook treats them as additional methods in the cross-method comparison — the LLM verdict prompt naturally references them when present and reads `adata.uns["qc_skipped"]` so the LLM can interpret author labels in their proper QC context (see "Cross-method comparison reads QC context" in the QC Heterogeneity section).
 
 ### Sweep recommendations (no longer bound to `sweep()`)
 
-The stage 6 notebook ends with one final cell that constructs an LLM call to generate **sweep recommendations** based on the single-run results: which clusters had high uncertainty across methods, which methods showed systematic disagreement, which marker_db gaps the LLM observed. Output is appended to the stage 6 markdown report. PI reads recommendations and decides whether to re-run annotation with different parameters (e.g. different LLM model sets, different scANVI references). Cost is one LLM call per stage 6 run — acceptable. This is the operational form of the project's "teach AI to make initial scRNA-seq judgements" thesis.
+The 06 notebook ends with one final cell that constructs an LLM call to generate **sweep recommendations** based on the single-run results: which clusters had high uncertainty across methods, which methods showed systematic disagreement, which marker_db gaps the LLM observed. Output is appended to the 06 markdown report. PI reads recommendations and decides whether to re-run annotation with different parameters (e.g. different LLM model sets, different scANVI references). Cost is one LLM call per 06 run — acceptable. This is the operational form of the project's "teach AI to make initial scRNA-seq judgements" thesis.
 *Note: the `sweep()` function was removed per ADR-0009; the term "sweep recommendations" is a retained workflow concept, not a framework function.*
 
 ### Per-cluster deep profile
 
-A second notebook (`stage6_per_cluster.ipynb`) loops over clusters and emits one markdown per cluster with UMAP highlight, top-marker dotplot, gene-set score violins, cross-disease abundance boxplot, and an LLM-written narrative paragraph. **No framework class, no panel registry — just a notebook with a `for cluster in adata.obs[label_col].cat.categories: ...` loop.**
+A second notebook (`06b_per_cluster.ipynb`) loops over clusters and emits one markdown per cluster with UMAP highlight, top-marker dotplot, gene-set score violins, cross-disease abundance boxplot, and an LLM-written narrative paragraph. **No framework class, no panel registry — just a notebook with a `for cluster in adata.obs[label_col].cat.categories: ...` loop.**
 
 ---
 
@@ -895,15 +895,15 @@ The `notebooks/` directory contains **directly runnable notebooks**, not templat
 
 ```
 notebooks/
-├── stage1_loaded.ipynb              # PARAMS cell + read_with_manifest + write h5ad
-├── stage2_qcd.ipynb                 # QC with manifest-driven skip logic + scrublet + SoupX (subprocess Rscript)
-├── stage3_normalized.ipynb          # normalize + log + HVG
-├── stage4_embedded.ipynb            # PCA + Harmony + scVI + scANVI + sweep with integration_metrics
-├── stage5_clustered.ipynb           # multi-resolution Leiden + sweep
-├── stage6_annotated.ipynb           # 5-method annotation + cross-method comparison + LLM verdict
-├── stage6_per_cluster.ipynb         # per-cluster deep profile
-├── stage6_5_subset.ipynb            # subset re-cluster (T cells / epithelial / etc.)
-└── stage7/                          # downstream modules; each consumes stage 6 (or 6.5) output
+├── 01_loaded.ipynb              # PARAMS cell + read_with_manifest + write h5ad
+├── 02_qcd.ipynb                 # QC with manifest-driven skip logic + scrublet + SoupX (subprocess Rscript)
+├── 03_normalized.ipynb          # normalize + log + HVG
+├── 04_embedded.ipynb            # PCA + Harmony + scVI + scANVI + sweep with integration_metrics
+├── 05_clustered.ipynb           # multi-resolution Leiden + sweep
+├── 06_annotated.ipynb           # 5-method annotation + cross-method comparison + LLM verdict
+├── 06b_per_cluster.ipynb         # per-cluster deep profile
+├── 06c_subset.ipynb            # subset re-cluster (T cells / epithelial / etc.)
+└── 07/                          # downstream modules; each consumes 06 (or 6.5) output
     ├── deg.ipynb                    # PR-3 — sc.tl.rank_genes_groups
     ├── pseudobulk_deg.ipynb         # PR-3 — DESeq2 (subprocess Rscript)
     ├── cnv.ipynb                    # PR-3 — InferCNV (pure Python infercnvpy)
@@ -921,7 +921,7 @@ Every notebook follows the same structural template (not a code template — a s
 
 1. **PARAMS cell** at the top (`# === PARAMS ===` markdown header + Python cell with assignments).
 2. **Imports cell** (scanpy / framework imports / subprocess + shutil if R tools used).
-3. **Load upstream h5ad** (or call `read_with_manifest` for stage 1).
+3. **Load upstream h5ad** (or call `read_with_manifest` for 01).
 4. **Stage logic cells** — scanpy native APIs.
 5. **Run-metadata cells** — `adata.uns[...] = {...}` writes documenting what was done.
 6. **Report cells** — `sc.pl.*` + `plt.savefig` + per-stage markdown summary.
@@ -931,13 +931,13 @@ Every notebook follows the same structural template (not a code template — a s
 
 The cell sequences below are the **specification** PR-3 coder agents implement against. Each line is one notebook cell; markdown cells are prefixed `[md]`, code cells are `[code]`.
 
-#### `stage1_loaded.ipynb`
+#### `01_loaded.ipynb`
 
 ```
-[md]   # Stage 1: Multi-source ingest + obs schema standardisation
+[md]   # 01: Multi-source ingest + obs schema standardisation
 [code] # === PARAMS ===
        MANIFEST_PATH = "data/Nancang_2025/manifest.yaml"
-       OUTPUT_PATH   = "results/{project}_stage1_loaded_v1.h5ad"
+       OUTPUT_PATH   = "results/{project}_01_loaded_v1.h5ad"
        RANDOM_SEED   = 42
 [code] # imports
 [code] # call read_with_manifest, inspect returned adata
@@ -947,10 +947,10 @@ The cell sequences below are the **specification** PR-3 coder agents implement a
 [code] # write h5ad with compression="lzf", del adata, gc.collect
 ```
 
-#### `stage2_qcd.ipynb`
+#### `02_qcd.ipynb`
 
 ```
-[md]   # Stage 2: QC + filter + doublet (scrublet) + ambient (SoupX, conditional)
+[md]   # 02: QC + filter + doublet (scrublet) + ambient (SoupX, conditional)
 [code] # === PARAMS === UPSTREAM_PATH, OUTPUT_PATH, QC thresholds, RSCRIPT_BIN, SOUPX_RSCRIPT
 [code] # imports (scanpy + subprocess/shutil/tempfile for SoupX subprocess Rscript)
 [code] # load adata + load manifest dict (for preprocessing_done / qc_overrides)
@@ -982,10 +982,10 @@ The cell sequences below are the **specification** PR-3 coder agents implement a
 [code] # write h5ad, del adata, gc.collect
 ```
 
-#### `stage3_normalized.ipynb`
+#### `03_normalized.ipynb`
 
 ```
-[md]   # Stage 3: normalize + log + HVG
+[md]   # 03: normalize + log + HVG
 [code] # === PARAMS === UPSTREAM_PATH, OUTPUT_PATH, n_top_genes, hvg_flavor
 [code] # imports, load
 [code] # adata.layers["counts"] = adata.X.copy()  (preserve raw counts before normalize)
@@ -999,10 +999,10 @@ The cell sequences below are the **specification** PR-3 coder agents implement a
 [code] # write, del, gc
 ```
 
-#### `stage4_embedded.ipynb`
+#### `04_embedded.ipynb`
 
 ```
-[md]   # Stage 4: multi-method embedding (all peers) + integration sweep
+[md]   # 04: multi-method embedding (all peers) + integration sweep
 [code] # === PARAMS === UPSTREAM_PATH, OUTPUT_PATH, n_pcs, embedding_methods (list), batch_key
 [code] # imports + load
 [md]   ## PCA (baseline)
@@ -1037,7 +1037,7 @@ The cell sequences below are the **specification** PR-3 coder agents implement a
 [code] # write, del, gc
 ```
 
-**Adding an embedding method**: write `adata.obsm["X_{method}"]` and add `"X_{method}"` to the sweep `use_rep` candidates — one cell, no framework change (see "Stage 4 sweep includes integration QC" above).
+**Adding an embedding method**: write `adata.obsm["X_{method}"]` and add `"X_{method}"` to the sweep `use_rep` candidates — one cell, no framework change (see "04 sweep includes integration QC" above).
 [code] # adata.uns["harmony_v1"] / ["scvi_v1"] / ["scanvi_v1"] metadata writes
        # adata.uns["status"] = "experimental" (PI manually changes to "promoted" later)
 [code] # cast all obsm latent matrices to float32
@@ -1045,10 +1045,10 @@ The cell sequences below are the **specification** PR-3 coder agents implement a
 [code] # write, del, gc
 ```
 
-#### `stage5_clustered.ipynb`
+#### `05_clustered.ipynb`
 
 ```
-[md]   # Stage 5: multi-resolution Leiden + sweep
+[md]   # 05: multi-resolution Leiden + sweep
 [code] # === PARAMS === UPSTREAM_PATH, OUTPUT_PATH, resolutions (list), use_rep
 [code] # imports + load
 [md]   ## Multi-resolution Leiden
@@ -1072,17 +1072,17 @@ The cell sequences below are the **specification** PR-3 coder agents implement a
 
 **Adding a clustering method (extension pattern).** Multi-resolution Leiden is the default because it is scanpy-native and pairs with `sweep` to let PI pick the resolution from a scored table (consistent with SOUL's "judgement not outsourced"). But Leiden alone sometimes leaves the cluster count ambiguous, so the project must stay open to plugging in other methods (ACDC, future community-detection methods, etc.) as they appear — per the 项目构思's "学术追新" goal.
 
-No framework code is needed for this. The extension mechanism is the same scanpy-native "multiple results coexist as parallel slots" pattern as stage-4 embeddings:
+No framework code is needed for this. The extension mechanism is the same scanpy-native "multiple results coexist as parallel slots" pattern as 04 embeddings:
 
 - Any clustering method writes its labels to its own obs column: `obs["acdc_clusters"]`, `obs["{method}_clusters"]`, etc. Multi-resolution Leiden already does this (`leiden_res_0.5`, `leiden_res_1.0`, ...).
 - Methods that sweep a parameter (Leiden over resolution) go through `sweep()`. Methods that auto-pick (ACDC searches for an optimal partition itself) just write their single result column directly — no sweep needed.
-- All resulting cluster columns are compared the same way: `sc.pl.umap` coloured by each, plus ARI / silhouette across columns. PI picks which column feeds stage 6.
+- All resulting cluster columns are compared the same way: `sc.pl.umap` coloured by each, plus ARI / silhouette across columns. PI picks which column feeds 06.
 - A new method is one added cell, not a framework change. ACDC specifically was tried in GCPL but never completed a run (prohibitively slow on PI's data), so it is **not** a default and `acdc_py` is **not** a PR-0a dependency; it is one example of the kind of method this slot accepts when PI chooses to install it.
 
-#### `stage6_annotated.ipynb`
+#### `06_annotated.ipynb`
 
 ```
-[md]   # Stage 6: Multi-method annotation + cross-method comparison
+[md]   # 06: Multi-method annotation + cross-method comparison
 [code] # === PARAMS === UPSTREAM_PATH, OUTPUT_PATH, MARKER_CSV, leiden_col
        # API keys loaded from .env (see .env.example for template)
 [code] # imports + load + load_markers(MARKER_CSV)
@@ -1107,18 +1107,18 @@ No framework code is needed for this. The extension mechanism is the same scanpy
 [code] # for each available method pair: confusion matrix + Cohen's kappa + sankey
 [md]   ## LLM verdict per cluster
 [code] # construct prompt with all method labels + top markers + scores + qc_skipped context
-       # call LLM via provider API key (from .env), write per-cluster verdicts to results/figures/stage6_verdicts/
+       # call LLM via provider API key (from .env), write per-cluster verdicts to results/figures/06_verdicts/
 [md]   ## PI sets cell_type_final_v1 (manual review against verdicts)
 [code] # pi_decisions = {leiden_id: cell_type, ...}
        # adata.obs["cell_type_final_v1"] = adata.obs[leiden_col].map(pi_decisions)
        # adata.uns["cell_type_final_v1_notes"] = {...}
 [md]   ## Sweep recommendations (LLM-generated)
-[code] # one OpenRouter call producing recommendations markdown appended to stage 6 report
+[code] # one OpenRouter call producing recommendations markdown appended to 06 report
 [code] # memory self-check: assert sp.issparse(adata.X) and adata.X.dtype == np.float32
 [code] # write, del, gc
 ```
 
-#### `stage6_per_cluster.ipynb`
+#### `06b_per_cluster.ipynb`
 
 ```
 [md]   # Per-cluster deep profile (one markdown per cluster)
@@ -1132,19 +1132,19 @@ No framework code is needed for this. The extension mechanism is the same scanpy
 [code] # write index.md linking all cluster files with one-line summaries
 ```
 
-#### `stage6_5_subset.ipynb`
+#### `06c_subset.ipynb`
 
 ```
-[md]   # Stage 6.5: subset re-cluster (e.g. T cells, SPEM-spectrum, epithelial)
+[md]   # 06c: subset re-cluster (e.g. T cells, SPEM-spectrum, epithelial)
 [code] # === PARAMS === UPSTREAM_PATH, OUTPUT_PATH, subset_filter (str expression on obs), n_top_genes, resolutions
 [code] # imports + load
 [code] # adata_sub = adata[adata.obs.eval(subset_filter)].copy()
        # adata_sub.uns["subset_of"] = UPSTREAM_PATH
        # adata_sub.uns["subset_filter"] = subset_filter
-[code] # re-run stage 3 (HVG re-selection on subset)
-[code] # re-run stage 4 (re-embedding)
-[code] # re-run stage 5 (re-clustering)
-[code] # re-run stage 6 (re-annotation; usually finer cell types)
+[code] # re-run 03 (HVG re-selection on subset)
+[code] # re-run 04 (re-embedding)
+[code] # re-run 05 (re-clustering)
+[code] # re-run 06 (re-annotation; usually finer cell types)
 [code] # reflow refined labels back to main adata as cell_type_final_subset_v1 column
        # main_adata = sc.read_h5ad(UPSTREAM_PATH)
        # main_adata.obs["cell_type_final_subset_v1"] = ...  # fill subset cells, NaN elsewhere
@@ -1152,10 +1152,10 @@ No framework code is needed for this. The extension mechanism is the same scanpy
 [code] # write subset h5ad + write updated main h5ad
 ```
 
-#### `stage7/deg.ipynb` (PR-3 in scope)
+#### `07/deg.ipynb` (PR-3 in scope)
 
 ```
-[md]   # Stage 7: per-cluster differential expression
+[md]   # 07: per-cluster differential expression
 [code] # === PARAMS === UPSTREAM_PATH, OUTPUT_PATH, label_col, method
 [code] # imports + load
 [code] # sc.tl.rank_genes_groups(adata, groupby=label_col, method="wilcoxon")
@@ -1166,10 +1166,10 @@ No framework code is needed for this. The extension mechanism is the same scanpy
 [code] # write, del, gc
 ```
 
-#### `stage7/pseudobulk_deg.ipynb` (PR-3 in scope)
+#### `07/pseudobulk_deg.ipynb` (PR-3 in scope)
 
 ```
-[md]   # Stage 7: pseudobulk cross-condition DEG via DESeq2 (subprocess Rscript)
+[md]   # 07: pseudobulk cross-condition DEG via DESeq2 (subprocess Rscript)
 [code] # === PARAMS === UPSTREAM_PATH, OUTPUT_PATH, sample_col, contrast_col, contrast_levels
 [code] # imports (decoupler for pseudobulk, subprocess for DESeq2 Rscript)
 [code] # pseudobulk per (sample_id × cell_type_final_v1) using decoupler
@@ -1179,10 +1179,10 @@ No framework code is needed for this. The extension mechanism is the same scanpy
 [code] # write CSVs to results/, optionally adata.uns["pseudobulk_deg_v1"]
 ```
 
-#### `stage7/cnv.ipynb` (PR-3 in scope)
+#### `07/cnv.ipynb` (PR-3 in scope)
 
 ```
-[md]   # Stage 7: CNV inference via infercnvpy (pure Python, no R)
+[md]   # 07: CNV inference via infercnvpy (pure Python, no R)
 [code] # === PARAMS === UPSTREAM_PATH, OUTPUT_PATH, reference_cells_col, reference_cats, gene_position_file
 [code] # imports (import infercnvpy as cnv) + load
 [code] # add chromosomal positions to adata.var (chromosome / start / end);
