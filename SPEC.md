@@ -93,7 +93,7 @@ The genuine IO gap: scanpy's readers don't unify cross-source obs schemas, don't
 9. **Disease system propagation**: copies the manifest's top-level `disease_system` field to `obs.disease_system` (Layer 1 required field) for every cell. Cross-project integration analyses across PI's portfolio (gastric / RA / PCOS / VVC) rely on this column.
 10. **Layer 2 strong-warn + LLM best-effort fix**: for each of the seven CellxGene-aligned fields (`disease`, `disease_ontology_term_id`, `tissue`, `tissue_ontology_term_id`, `assay`, `sex`, `development_stage`) that is missing or malformed, emits a strong warning and invokes an LLM-assisted disambiguator (looking at obs head + manifest + clinical-metadata head) to propose a value. PI confirms in-notebook; confirmed fixes are written back into `manifest.yaml` for reproducibility.
 11. **Records (does not load) raw matrix path** for SoupX: if manifest provides `input.raw_path`, writes it to `adata.uns["raw_matrix_path"]`. 02 SoupX reads it on demand to avoid doubling 01 memory.
-12. Computes baseline QC metrics (`n_genes`, `total_counts`, `pct_counts_mt`, `pct_counts_ribo`) on `adata.X` so they are present and column-aligned across all source datasets regardless of preprocessing state. These are stage-2 prerequisites; computing them at ingest avoids a missing-column branch at 02.
+12. Computes baseline QC metrics (`n_genes`, `total_counts`, `pct_counts_mt`, `pct_counts_ribo`) on `adata.X` so they are present and column-aligned across all source datasets regardless of preprocessing state. These are 02 prerequisites; computing them at ingest avoids a missing-column branch at 02.
 13. Returns plain `AnnData`. **Caller does anything they want next** — `adata.write_h5ad(...)` to checkpoint, scanpy ops to continue, etc.
 
 The function is one file (`src/scrna_integration/io.py`) + minimal helpers. It does **not** call `validate_obs`, does **not** push metadata into a hidden namespace beyond `species` / `raw_matrix_path`, does **not** assign a "stage" tag. PI inspects obs after reading and decides whether the schema is OK.
@@ -189,7 +189,7 @@ Two decision inputs, both first-class:
 
 PI weighs both and marks one embedding `promoted`. cellxgene_census pretrained scVI and scANVI are optional candidate cells (each with its prerequisite noted — census model coverage for the tissue / a labelled reference atlas respectively), not framework-prescribed steps.
 
-**Adding an embedding method (extension pattern).** Same scanpy-native "parallel slots" mechanism as stage-5 clustering: a new method writes `adata.obsm["X_{method}"]` and is appended to the stage-4 notebook's `use_reps` list in the explicit for loop — one added cell, no framework change. This is how PI plugs in new integration methods as they are published.
+**Adding an embedding method (extension pattern).** Same scanpy-native "parallel slots" mechanism as 05 clustering: a new method writes `adata.obsm["X_{method}"]` and is appended to the 04 notebook's `use_reps` list in the explicit for loop — one added cell, no framework change. This is how PI plugs in new integration methods as they are published.
 
 ### 06c subset analysis
 
@@ -1072,7 +1072,7 @@ The cell sequences below are the **specification** PR-3 coder agents implement a
 
 **Adding a clustering method (extension pattern).** Multi-resolution Leiden is the default because it is scanpy-native and pairs with `sweep` to let PI pick the resolution from a scored table (consistent with SOUL's "judgement not outsourced"). But Leiden alone sometimes leaves the cluster count ambiguous, so the project must stay open to plugging in other methods (ACDC, future community-detection methods, etc.) as they appear — per the 项目构思's "学术追新" goal.
 
-No framework code is needed for this. The extension mechanism is the same scanpy-native "multiple results coexist as parallel slots" pattern as stage-4 embeddings:
+No framework code is needed for this. The extension mechanism is the same scanpy-native "multiple results coexist as parallel slots" pattern as 04 embeddings:
 
 - Any clustering method writes its labels to its own obs column: `obs["acdc_clusters"]`, `obs["{method}_clusters"]`, etc. Multi-resolution Leiden already does this (`leiden_res_0.5`, `leiden_res_1.0`, ...).
 - Methods that sweep a parameter (Leiden over resolution) go through `sweep()`. Methods that auto-pick (ACDC searches for an optimal partition itself) just write their single result column directly — no sweep needed.
