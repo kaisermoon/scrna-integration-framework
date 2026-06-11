@@ -1,11 +1,12 @@
 """scrna-integration-framework: 跨疾病多来源单细胞整合分析框架。
 
-框架代码面积极小——两个函数 + 可直接调用的指标函数模块。
+框架代码面积极小——三个公开函数 + 可直接调用的指标函数模块。
 一切以面向非计算机专业 PI/学生、能逐行看懂为准（ADR-0009）。
 """
 
 __version__ = "0.0.1"
 
+from scrna_integration.io import inject_genomic_positions as inject_genomic_positions
 from scrna_integration.io import read_with_manifest as read_with_manifest
 from scrna_integration.markers import load_markers as load_markers
 from scrna_integration.platform import rscript_bin as rscript_bin

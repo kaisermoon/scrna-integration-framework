@@ -594,6 +594,134 @@ def _sync_ensembl_to_symbol(adata: anndata.AnnData) -> None:
 
 
 # =============================================================================
+# 基因组位置注入（公开，用于 CNV 推断等下游分析）
+# =============================================================================
+
+
+def inject_genomic_positions(
+    adata: anndata.AnnData,
+    species: str = "human",
+    batch_size: int = 1000,
+) -> anndata.AnnData:
+    """向 adata.var 注入基因组位置信息（chromosome/start/end）。
+
+    使用 mygene.info 的 genomic_pos 端点批量查询。
+    查询失败的基因对应列填 NaN 并打印 warning（不中断）。
+
+    Parameters
+    ----------
+    adata : AnnData
+        输入对象。var 的 index 或 'ensembl_id'/'gene_ids' 列作为查询键。
+    species : str
+        物种，默认 "human"。
+    batch_size : int
+        每次 API 请求的基因数，默认 1000。
+
+    Returns
+    -------
+    AnnData
+        同一对象（inplace 修改 var，新增 'chromosome'/'start'/'end' 三列）。
+    """
+    import re
+
+    try:
+        import mygene
+    except ImportError:
+        raise ImportError(
+            "mygene 未安装。请运行: pip install mygene"
+        ) from None
+
+    # ---- 自动检测基因标识列 ----
+    if "ensembl_id" in adata.var.columns:
+        gene_ids_raw = adata.var["ensembl_id"].astype(str).tolist()
+    elif "gene_ids" in adata.var.columns:
+        gene_ids_raw = adata.var["gene_ids"].astype(str).tolist()
+    else:
+        gene_ids_raw = adata.var.index.astype(str).tolist()
+
+    # ---- 清洗：去掉 Ensembl 版本号后缀 ----
+    gene_ids_clean = [re.sub(r"\.\d+$", "", str(g)) for g in gene_ids_raw]
+
+    # ---- 推断查询 scope ----
+    _sample_ids = gene_ids_clean[: min(5, len(gene_ids_clean))]
+    if any(str(g).startswith("ENS") for g in _sample_ids):
+        scopes = "ensembl.gene"
+    else:
+        scopes = "symbol"
+
+    # ---- 批量查询 mygene ----
+    mg = mygene.MyGeneInfo()
+    pos_map: dict[str, dict] = {}  # clean_id -> {chromosome, start, end}
+    n_total = len(gene_ids_clean)
+
+    for i in range(0, n_total, batch_size):
+        batch = gene_ids_clean[i : i + batch_size]
+        try:
+            results = mg.querymany(
+                batch,
+                scopes=scopes,
+                fields="genomic_pos",
+                species=species,
+                returnall=False,
+            )
+        except Exception:
+            warnings.warn(
+                f"mygene 查询失败（批次 {i}）；对应基因的位置信息留空",
+                stacklevel=2,
+            )
+            continue
+
+        for r in results:
+            query = r.get("query", "")
+            if r.get("notfound"):
+                continue
+            gpos = r.get("genomic_pos")
+            if gpos is None:
+                continue
+            if isinstance(gpos, list):
+                if len(gpos) == 0:
+                    continue
+                gpos = gpos[0]
+            if not isinstance(gpos, dict):
+                continue
+
+            chr_val = str(gpos.get("chr", ""))
+            if not chr_val:
+                continue
+            # chr 前缀归一化
+            chr_val = re.sub(r"^chr", "", chr_val, flags=re.IGNORECASE)
+
+            pos_map[query] = {
+                "chromosome": chr_val,
+                "start": gpos.get("start"),
+                "end": gpos.get("end"),
+            }
+
+    # ---- 写入 adata.var ----
+    adata.var["chromosome"] = [
+        pos_map.get(gid, {}).get("chromosome", np.nan) for gid in gene_ids_clean
+    ]
+    adata.var["start"] = pd.to_numeric(
+        [pos_map.get(gid, {}).get("start", np.nan) for gid in gene_ids_clean],
+        errors="coerce",
+    )
+    adata.var["end"] = pd.to_numeric(
+        [pos_map.get(gid, {}).get("end", np.nan) for gid in gene_ids_clean],
+        errors="coerce",
+    )
+
+    # ---- 汇总警告 ----
+    n_failed = adata.var["chromosome"].isna().sum()
+    if n_failed > 0:
+        warnings.warn(
+            f"⚠️ {n_failed}/{n_total} 基因未获取到位置信息",
+            stacklevel=2,
+        )
+
+    return adata
+
+
+# =============================================================================
 # Layer 2 警告（保留，规则逻辑不琐碎）
 # =============================================================================
 

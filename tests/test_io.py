@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import builtins
 import os
 import tempfile
 import warnings
+from unittest import mock
 
 import anndata
 import numpy as np
@@ -15,9 +17,11 @@ import yaml
 
 from scrna_integration.io import (
     _compute_baseline_qc,
+    _mygene_symbol_to_ensembl,
     _sync_gene_ids,
     _validate_manifest,
     _warn_layer2,
+    inject_genomic_positions,
     read_with_manifest,
 )
 
@@ -701,3 +705,163 @@ class TestInjectOntologyConstants:
         assert (sample0["treatment_group"] == "control").all()
         sample1 = result.obs[result.obs["sample_id"] == "sample_1"]
         assert (sample1["treatment_group"] == "treatment").all()
+
+
+# ---------------------------------------------------------------------------
+# Mygene contract tests --- mock 覆盖网络调用（用 sys.modules 替换 mygene）
+# ---------------------------------------------------------------------------
+
+
+_ORIGINAL_IMPORT = builtins.__import__
+
+
+def _make_mygene_mock(return_values):
+    """构建 mock mygene 模块，querymany 返回 *return_values*。"""
+    mock_mg = mock.MagicMock()
+    mock_client = mock.MagicMock()
+    mock_mg.MyGeneInfo.return_value = mock_client
+    mock_client.querymany.return_value = return_values
+    return mock_mg
+
+
+class TestMygeneContract:
+    """inject_genomic_positions 与 _mygene_symbol_to_ensembl 的 mock 测试。
+
+    核心 mock 策略：用 mock.patch.dict("sys.modules", ...) 替换 mygene 模块，
+    因为 inject_genomic_positions 内部使用 ``import mygene``（通过 sys.modules
+    解析），而非通过 scrna_integration.io.mygene 属性访问。
+    """
+
+    # ------------------------------------------------------------------
+    # inject_genomic_positions
+    # ------------------------------------------------------------------
+
+    def test_inject_genomic_positions_normal(self):
+        """genomic_pos 是 dict（单位置）--> 三列正确填入。"""
+        mock_mg = _make_mygene_mock([
+            {
+                "query": "ENSG00000141510",
+                "genomic_pos": {"chr": "17", "start": 7660000, "end": 7670000},
+            },
+            {
+                "query": "ENSG00000139618",
+                "genomic_pos": {"chr": "chr13", "start": 32300000, "end": 32350000},
+            },
+        ])
+
+        adata = _make_synthetic_adata(n_genes=3)
+        adata.var["ensembl_id"] = [
+            "ENSG00000141510",
+            "ENSG00000139618",
+            "ENSG00000999999",
+        ]
+        with mock.patch.dict("sys.modules", {"mygene": mock_mg}):
+            result = inject_genomic_positions(adata)
+
+        assert result.var["chromosome"].iloc[0] == "17"
+        assert result.var["start"].iloc[0] == 7660000
+        assert result.var["end"].iloc[0] == 7670000
+        # "chr13" --> "13"（chr 前缀已归一化）
+        assert result.var["chromosome"].iloc[1] == "13"
+        assert result.var["start"].iloc[1] == 32300000
+        # ENSG00000999999 未找到 --> NaN
+        assert pd.isna(result.var["chromosome"].iloc[2])
+        assert pd.isna(result.var["start"].iloc[2])
+
+    def test_inject_genomic_positions_partial(self):
+        """部分基因返回 notfound:True --> 对应行 NaN + warning。"""
+        mock_mg = _make_mygene_mock([
+            {
+                "query": "ENSG00000141510",
+                "genomic_pos": {"chr": "17", "start": 7660000, "end": 7670000},
+            },
+            {"query": "ENSG00000999999", "notfound": True},
+        ])
+
+        adata = _make_synthetic_adata(n_genes=2)
+        adata.var["ensembl_id"] = ["ENSG00000141510", "ENSG00000999999"]
+        with mock.patch.dict("sys.modules", {"mygene": mock_mg}):
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                result = inject_genomic_positions(adata)
+
+        assert result.var["chromosome"].iloc[0] == "17"
+        assert pd.isna(result.var["chromosome"].iloc[1])
+        pos_warnings = [x for x in w if "未获取到位置信息" in str(x.message)]
+        assert len(pos_warnings) >= 1
+
+    def test_inject_genomic_positions_multi_pos(self):
+        """genomic_pos 是 list（多位置）--> 取第一个。"""
+        mock_mg = _make_mygene_mock([
+            {
+                "query": "ENSG00000141510",
+                "genomic_pos": [
+                    {"chr": "17", "start": 7660000, "end": 7670000},
+                    {"chr": "17", "start": 7680000, "end": 7690000},
+                ],
+            },
+        ])
+
+        adata = _make_synthetic_adata(n_genes=1)
+        adata.var["ensembl_id"] = ["ENSG00000141510"]
+        with mock.patch.dict("sys.modules", {"mygene": mock_mg}):
+            result = inject_genomic_positions(adata)
+
+        assert result.var["start"].iloc[0] == 7660000
+
+    def test_inject_genomic_positions_no_mygene(self):
+        """mygene 未安装 --> raise ImportError。"""
+        def _side_effect(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "mygene":
+                raise ImportError("No module named 'mygene'")
+            return _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
+
+        adata = _make_synthetic_adata(n_genes=3)
+        with mock.patch("builtins.__import__", side_effect=_side_effect):
+            with pytest.raises(ImportError, match="mygene"):
+                inject_genomic_positions(adata)
+
+    def test_inject_genomic_positions_network_error(self):
+        """querymany raise 异常 --> 优雅降级（NaN + warning）。"""
+        mock_mg = _make_mygene_mock([])
+        mock_mg.MyGeneInfo.return_value.querymany.side_effect = ConnectionError(
+            "Network unreachable"
+        )
+
+        adata = _make_synthetic_adata(n_genes=3)
+        adata.var["ensembl_id"] = [
+            "ENSG00000141510",
+            "ENSG00000139618",
+            "ENSG00000999999",
+        ]
+        with mock.patch.dict("sys.modules", {"mygene": mock_mg}):
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                result = inject_genomic_positions(adata)
+
+        assert result.var["chromosome"].isna().all()
+        query_warnings = [
+            x for x in w if "mygene 查询失败" in str(x.message)
+        ]
+        assert len(query_warnings) >= 1
+
+    # ------------------------------------------------------------------
+    # _mygene_symbol_to_ensembl（覆盖现有测试漏洞）
+    # ------------------------------------------------------------------
+
+    def test_mygene_symbol_to_ensembl_mock(self):
+        """正常响应 --> ensembl_id 填入 var 列。"""
+        mock_mg = _make_mygene_mock([
+            {"query": "GENE_0", "ensembl": {"gene": "ENSG00000000001"}},
+            {"query": "GENE_1", "ensembl": {"gene": "ENSG00000000002"}},
+            {"query": "GENE_2", "notfound": True},
+        ])
+
+        adata = _make_synthetic_adata(n_genes=3, gene_index="symbol")
+        with mock.patch.dict("sys.modules", {"mygene": mock_mg}):
+            _mygene_symbol_to_ensembl(adata)
+
+        assert adata.var["ensembl_id"].iloc[0] == "ENSG00000000001"
+        assert adata.var["ensembl_id"].iloc[1] == "ENSG00000000002"
+        # notfound --> 空字符串
+        assert adata.var["ensembl_id"].iloc[2] == ""
