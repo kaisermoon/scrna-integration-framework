@@ -3,7 +3,7 @@ title: "ADR 索引"
 type: adr-index
 project_id: "scrna-integration-framework"
 created: "2026-06-08"
-updated: "2026-06-08"
+updated: "2026-06-11"
 ---
 
 # 架构决策记录（ADR）索引
@@ -25,6 +25,7 @@ ADR 编号按决策时间排序，非按重要程度。
 | [ADR-0008](0008-absorb-student-code-by-rewriting.md) | Absorb student-code downstream techniques by re-implementing | accepted | student-code 中的下游技术（entropy、CytoTRACE、UCell、scCODA 等）全部吸收，但每个都按本项目规范重新实现，不直接复制——student code 是"算法正确性参考"而非代码捐献者 |
 | [ADR-0009](0009-de-encapsulation-teaching-transparency.md) | 教学透明：删 sweep、摊平 IO 琐碎 helper、注释中文化 | accepted | 从薄框架进一步回退到"教学透明"：删除 `sweep` 函数、摊平 IO 中的琐碎 helper、所有注释改为中文；判据是"非 CS 学生打开 notebook 能否逐行看懂" |
 | [ADR-0010](0010-cross-platform-reproducibility.md) | 跨平台一致性：精确 pin 源 spec + env_parity 诊断脚本 + 人工对齐 | accepted | 项目同时跑在 Mac（osx-arm64）与 Linux 服务器（linux-64）；源 spec 用精确 `==` pin 作为期望基准，`scripts/env_parity.py` 导出快照+对比差异供人工对齐，无法对齐的极少数包登记 `docs/cross-platform-exceptions.md`，所有 OS 检测收口到 `src/scrna_integration/platform.py` 单一模块 |
+| [ADR-0011](0011-per-dataset-qc-notebooks.md) | Per-dataset QC notebooks over monolithic load-then-QC | accepted | 拆分 01-02 为 per-dataset notebooks（独立 QC + 自适应阈值） + 02_merged.ipynb（显式 concat + 跨数据集诊断）；旧 01_loaded + 02_qcd 移入 `notebooks/_deprecated/`；下游 03-15 合约不变 |
 
 ## 引用 ADR
 
