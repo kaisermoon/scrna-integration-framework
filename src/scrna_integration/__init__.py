@@ -9,6 +9,7 @@ __version__ = "0.0.1"
 from scrna_integration.io import inject_genomic_positions as inject_genomic_positions
 from scrna_integration.io import read_with_manifest as read_with_manifest
 from scrna_integration.markers import load_markers as load_markers
+from scrna_integration.platform import check_r_available as check_r_available
 from scrna_integration.platform import rscript_bin as rscript_bin
 # scorers 模块可直接导入使用：
 #   from scrna_integration.scorers import integration_metrics

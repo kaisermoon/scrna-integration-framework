@@ -155,3 +155,40 @@ def rscript_bin(r_env_name: str = "scrna-integration-r") -> str:
         f"  d) 如果 Rscript 已在 PATH 中但上述仍失败，请检查 "
         f"shutil.which('Rscript') 的返回值并报告。"
     )
+
+
+def check_r_available(r_env_name: str = "scrna-integration-r") -> tuple:
+    """检查 R 环境是否可用。
+
+    内部调用 :func:`rscript_bin`，捕获 ``RuntimeError``。
+    成功返回 ``(path, True)``，失败返回 ``(None, False)`` 并打印标准化提示。
+
+    Parameters
+    ----------
+    r_env_name : str
+        conda R 环境名称，默认 ``"scrna-integration-r"``。
+
+    Returns
+    -------
+    tuple[str | None, bool]
+        ``(Rscript 绝对路径, True)`` 或 ``(None, False)``。
+
+    Examples
+    --------
+    >>> from scrna_integration.platform import check_r_available
+    >>> RSCRIPT_BIN, R_AVAILABLE = check_r_available()
+    >>> if R_AVAILABLE:
+    ...     # 调用 R 工具
+    ...     subprocess.run([RSCRIPT_BIN, "--vanilla", script])
+    """
+    try:
+        path = rscript_bin(r_env_name)
+    except RuntimeError:
+        print(
+            f"⚠️ R 环境未就绪（{r_env_name}），"
+            f"R 依赖分析将跳过。如需启用，请安装 conda 环境: "
+            f"conda env create -f environment-r.yml"
+        )
+        return (None, False)
+    print(f"✓ R 环境就绪: {path}")
+    return (path, True)

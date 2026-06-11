@@ -8,7 +8,7 @@ import tempfile
 
 import pytest
 
-from scrna_integration.platform import platform_tag, rscript_bin
+from scrna_integration.platform import check_r_available, platform_tag, rscript_bin
 
 # ---------------------------------------------------------------------------
 # 辅助：在临时目录中模拟 conda 环境目录结构
@@ -238,3 +238,49 @@ def test_platform_tag_real_call():
     # 跨平台断言：platform_tag() 在 Mac (osx-arm64/osx-64) 或 Linux (linux-64) 上
     # 均返回对应已知标识，不绑定单一平台
     assert tag in {"linux-64", "osx-arm64", "osx-64"}
+
+
+# ---------------------------------------------------------------------------
+# 测试：check_r_available() —— R 环境可用性检测（带标准化中文提示）
+# ---------------------------------------------------------------------------
+
+
+def test_check_r_available_success(monkeypatch):
+    """mock rscript_bin 返回有效路径 → 返回 (path, True)。"""
+    expected = "/path/to/Rscript"
+    monkeypatch.setattr(
+        "scrna_integration.platform.rscript_bin", lambda env="scrna-integration-r": expected
+    )
+    path, ok = check_r_available()
+    assert ok is True
+    assert path == expected
+
+
+def test_check_r_available_failure(monkeypatch):
+    """mock rscript_bin 抛出 RuntimeError → 返回 (None, False)。"""
+    def _raise(*args, **kwargs):
+        raise RuntimeError("无法定位 Rscript")
+    monkeypatch.setattr("scrna_integration.platform.rscript_bin", _raise)
+    path, ok = check_r_available()
+    assert ok is False
+    assert path is None
+
+
+def test_check_r_available_prints_message(monkeypatch, capsys):
+    """验证两种情况的打印输出均包含标准化中文提示。"""
+    # 成功情况
+    monkeypatch.setattr(
+        "scrna_integration.platform.rscript_bin", lambda env="scrna-integration-r": "/fake/Rscript"
+    )
+    check_r_available()
+    out = capsys.readouterr().out
+    assert "R 环境就绪" in out
+
+    # 失败情况
+    def _raise(*args, **kwargs):
+        raise RuntimeError("no")
+    monkeypatch.setattr("scrna_integration.platform.rscript_bin", _raise)
+    check_r_available()
+    out = capsys.readouterr().out
+    assert "R 环境未就绪" in out
+    assert "conda env create -f environment-r.yml" in out
