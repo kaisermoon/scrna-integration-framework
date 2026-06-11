@@ -192,11 +192,16 @@ if (is.null(sc)) {
   # 输出原始 filtered counts 作为"校正后"（即不做校正，但保持流程完整）
   corrected <- filtered_counts
 } else {
-  # 输出污染比例摘要
+  # 输出污染比例摘要（per-gene rho 分布）
   rho <- sc$metaData$rho
   if (!is.null(rho)) {
     cat(sprintf("[SoupX] estimated contamination (rho): median=%.4f, mean=%.4f, max=%.4f\n",
                 median(rho, na.rm = TRUE), mean(rho, na.rm = TRUE), max(rho, na.rm = TRUE)))
+    # 输出全局 contamination fraction 供 Python 端读回（Issue #4）
+    # sc$metaData$rho 是 per-gene 向量，取第一个值为全局 rho 估计值
+    rho_global <- sc$metaData$rho[1]
+    writeLines(as.character(rho_global), file.path(work_dir, "rho.txt"))
+    cat(sprintf("  rho (contamination fraction): %.4f\n", rho_global))
   }
 
   cat("[SoupX] running adjustCounts (correcting counts)...\n")
