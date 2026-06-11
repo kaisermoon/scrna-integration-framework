@@ -168,15 +168,53 @@ The pipeline is a **file-naming convention**, not a framework feature. There is 
 
 ```
 stage 0    raw/                                          external raw data (cellranger / h5ad / RData), read-only
-01    results/{project}_01_loaded_v{N}.h5ad     ingest + obs schema (read_with_manifest)
-02    results/{project}_02_qcd_v{N}.h5ad        QC + filter + doublet (scrublet) + ambient (SoupX)
-03    results/{project}_03_normalized_v{N}.h5ad normalize + log + HVG
-04    results/{project}_04_embedded_v{N}.h5ad   PCA / Harmony / scVI / scANVI (sweep + integration QC inline)
-05    results/{project}_05_clustered_v{N}.h5ad  multi-resolution Leiden
-06    results/{project}_06_annotated_v{N}.h5ad  multi-method annotation + cross-method comparison
-06c  results/{project}_06c_subset_v{N}.h5ad   subset re-cluster (re-run 03-5 on a subset; e.g. all T cells)
-07    results/downstream/{module}_v{N}.h5ad         downstream modules (one h5ad per module, see below)
+01    results/01_{dataset}_v{N}.h5ad            per-dataset independent QC (MAD adaptive thresholds / scrublet / SoupX / cell cycle / complexity / special gene markers)
+02    results/02_merged_v{N}.h5ad              explicit anndata.concat(join="inner") + cross-dataset diagnostics
+03    results/03_normalized_v{N}.h5ad          normalize + log1p + batch-aware HVG + HVG exclusion list (+ optional Pearson residuals)
+04    results/04_embedded_v{N}.h5ad            PCA / Harmony / scVI / scANVI (elbow plot + N_NEIGHBORS sweep + HARMONY_THETA sweep + integration metrics)
+05    results/05_clustered_v{N}.h5ad           multi-resolution Leiden + clustering stability (subsample ARI) + marker gene preview
+06    results/06_annotated_v{N}.h5ad           multi-method annotation + cross-method comparison
+06c  results/06c_subset_v{N}.h5ad              subset re-cluster (re-run 03-5 on a subset; e.g. all T cells)
+07    results/downstream/{module}_v{N}.h5ad    downstream modules (one h5ad per module, see below)
 ```
+
+### Per-dataset QC (Stage 01)
+
+Each source dataset gets its own notebook under `notebooks/01_per_dataset/`. A dataset notebook independently runs `read_with_manifest` then performs the complete QC pipeline (MAD-based adaptive thresholds, scrublet doublet detection, SoupX ambient correction, cell cycle scoring, gene complexity, special gene marker profiling) before writing a per-dataset checkpoint h5ad. This design (ADR-0011) replaces the former monolithic `01_loaded` + `02_qcd` approach, enabling:
+
+- **Dataset-specific QC thresholds** — tissue biopsies vs organoids have fundamentally different MT% baselines; each gets independent adaptive thresholds
+- **Inspect-before-merge** — researchers can examine each dataset's quality distribution independently before deciding to merge
+- **Clear QC strategy per dataset** — recorded in `adata.uns["qc_report_v1"]` with `strategy` field (adaptive / fixed / skip), aggregated at merge time
+
+### Merge (Stage 02)
+
+`02_merged.ipynb` loads all per-dataset h5ads and performs explicit `anndata.concat(join="inner", label="source_dataset", keys=...)`. It validates cell_id uniqueness, runs cross-dataset QC diagnostics (violin plots and summary tables per source_dataset), and aggregates per-dataset `uns["qc_report_v1"]` records into a unified `uns["merge_report_v1"]`. The merged AnnData serves as the single upstream for stages 03-15.
+
+### Scalar-or-Sweep: Dual-mode Parameter Design (Stages 03-05)
+
+Stages 03 through 05 support a **dual-mode parameter pattern**: write a single scalar value and the notebook executes that value directly; write a Python list and the notebook automatically sweeps over all values, producing comparison visualisations. There is no `sweep()` function or framework abstraction — each stage notebook uses plain `isinstance(param, list)` branching with explicit for loops (ADR-0009).
+
+**Design goals**:
+- **Single value mode** — the happy path. One cell, one parameter, one result. Students reading the notebook see one clean execution path.
+- **List/sweep mode** — exploratory. The same notebook cell runs a for loop over multiple values, computes comparison metrics (Jaccard overlap, UMAP grids, silhouette scores, etc.), and produces visualisations to help PI choose the best value.
+- **No framework magic** — the branching is visible Python in the notebook: `_values = N_TOP_GENES if isinstance(N_TOP_GENES, list) else [N_TOP_GENES]`. A non-CS student reading the code sees exactly how the sweep works.
+
+**Parameters supporting Scalar-or-Sweep**:
+
+| Stage | Parameter | Single example | Sweep example | Comparison output |
+|-------|-----------|---------------|---------------|-------------------|
+| 03 | `N_TOP_GENES` | `2000` | `[1500, 2000, 3000, 4000]` | Jaccard overlap heatmap of HVG sets |
+| 03 | `HVG_FLAVOR` | `"seurat"` | `["seurat", "seurat_v3"]` | Jaccard overlap heatmap (crossed with `N_TOP_GENES`) |
+| 04 | `N_NEIGHBORS` | `15` | `[10, 15, 20, 30]` | UMAP grid coloured by batch_key, comparing local-vs-global structure |
+| 04 | `HARMONY_THETA` | `2.0` | `[1, 2, 3]` | UMAP grid comparing batch correction strength (mixing vs over-correction) |
+| 05 | `RESOLUTIONS` | `[0.2, 0.4, ..., 2.0]` | (always a list) | Cluster count vs resolution plots, silhouette scores, cluster size distributions |
+
+**Mode switching**: to switch from single-value to sweep mode, replace `N_TOP_GENES = 2000` with `N_TOP_GENES = [1500, 2000, 3000]` in the PARAMS cell. No other code changes needed. The notebook's branching logic handles both paths.
+
+**Sweep comparison outputs**:
+- All sweep results are saved under `results/figures/sweep_{stage}/` (e.g. `sweep_04/` for embedding comparisons).
+- Each sweep writes a markdown report summarising the comparison table and key findings.
+- Sweep outputs are diagnostic aids — they inform PI's parameter choice but are not themselves pipeline checkpoints. The chosen parameter value goes into the next stage's notebook PARAMS cell.
 
 ### 04 sweep includes integration QC
 
@@ -699,45 +737,67 @@ The decision rule for adding a third asset category to `references/` mirrors ADR
 
 ## QC Heterogeneity
 
-Some source datasets ship pre-filtered (Tsubosaka, Nowicki-Osuch, Kim) — re-running scrublet / SoupX on already-cleaned data is a scientific error. Manifest declares preprocessing state via `preprocessing_done` and per-step `qc_overrides`. PI's QC notebook then **skips** matching steps based on the manifest dict — the notebook reads the manifest, branches on each step, runs scanpy QC functions where applicable.
+QC heterogeneity is a first-class reality in multi-source scRNA-seq integration. Some source datasets ship pre-filtered (Nowicki-Osuch); some are organoids with inherently different MT% baselines (Kim, Yue); some are raw cellranger outputs (Nancang). A single set of QC thresholds applied blindly across all datasets is a scientific error.
 
-```python
-# In 02 QC notebook
-manifest = yaml.safe_load(open(f"data/{source_dataset}/manifest.yaml"))
-preprocessing_done = manifest.get("preprocessing_done", [])
-qc_overrides = manifest.get("qc_overrides", {})
+The framework addresses this through **per-dataset QC notebooks** (ADR-0011). Each dataset's notebook under `notebooks/01_per_dataset/` independently applies the full QC pipeline with dataset-appropriate parameters. At merge time (`02_merged.ipynb`), per-dataset `adata.uns["qc_report_v1"]` records are aggregated into a cross-dataset summary, and `uns["merge_report_v1"]` records whether QC strategies were heterogeneous.
 
-if "doublet_removal" not in preprocessing_done and not qc_overrides.get("doublet_removal", {}).get("skip"):
-    sc.external.pp.scrublet(adata)
-else:
-    print(f"Skipping doublet_removal: {qc_overrides.get('doublet_removal', {}).get('reason', 'already done by author')}")
-    adata.obs["doublet_score"] = float("nan")    # column-align across datasets
-    adata.obs["predicted_doublet"] = False
-```
+### Three QC strategies per dataset
 
-The framework does **not** ship a `qc_runner` function. The 02 notebook (`02_qcd.ipynb`) contains the branch logic above directly; PI edits PARAMS at the top and runs.
+Each per-dataset notebook declares its QC strategy in `adata.uns["qc_report_v1"]["strategy"]`:
 
-### Column alignment
+1. **adaptive** — MAD-based thresholds (`median +/- N_MAD * MAD`) computed from the dataset's own distribution. The default; appropriate for most datasets.
+2. **fixed** — explicit hard thresholds (e.g. `min_genes=200, max_genes=6000, max_pct_mt=20`). Used when PI has domain knowledge about a specific dataset's expected range.
+3. **skip** — a QC step is skipped because the dataset author already performed it. Declared in manifest via `preprocessing_done` and `qc_overrides`. The notebook still column-aligns affected obs columns (fill NaN for skipped operations).
 
-For final cross-dataset analyses to work, QC-derived obs columns must be present and aligned across all integrated cells:
+The MAD multiplier (`N_MAD`) is the real QC tuning knob — higher values admit more cells, lower values are stricter. The per-dataset notebook uses `N_MAD = 3` as default for `n_genes` and `total_counts`, and `N_MAD = 2.5` for `pct_counts_mt`.
 
-- `obs.n_genes`, `obs.total_counts`, `obs.pct_counts_mt`, `obs.pct_counts_ribo` — always recomputed from `adata.X` regardless of preprocessing state. The 02 notebook includes these computations.
-- `obs.doublet_score`, `obs.predicted_doublet` — present as columns; **NaN** on cells where doublet detection was skipped (encodes "not applicable", not "missing data").
-- `obs.ambient_correction_applied` (bool) — true on cells where ambient correction ran; false elsewhere.
+### Mark-not-filter principle
 
-PI reads these conventions in the stage notebook and follows them.
+All per-dataset QC follows the **mark-not-filter** principle: problematic cells are marked with boolean obs columns (`predicted_doublet`, `high_mt`, `high_ribo`, `stress_cell`, etc.) but not automatically removed. PI inspects the distributions (violins, scatter plots, per-dataset summaries) in the notebook and decides which cells to retain. This is a deliberate departure from the old approach of applying hard thresholds in batch — it gives PI the final say on filtering decisions that affect all downstream analyses.
+
+### QC dimensions per dataset
+
+Each per-dataset notebook runs the following QC dimensions:
+
+1. **MAD-based adaptive filtering** — `n_genes`, `total_counts`, `pct_counts_mt` thresholds computed per dataset
+2. **Doublet detection** — scrublet (skipped when manifest declares `preprocessing_done: ["doublet_removal"]`)
+3. **Ambient RNA correction** — SoupX via subprocess Rscript (skipped when `input.raw_path` is absent)
+4. **Cell cycle scoring** — `sc.tl.score_genes_cell_cycle` computes S/G2M scores and phase classification
+5. **Gene complexity** — `n_genes_by_counts`, `log1p_total_counts` for richness-vs-depth diagnostics
+6. **Special gene markers** — hemoglobin (HBA/HBB, erythrocyte contamination), stress response (JUN/FOS, dissociation artefact), ribosomal protein fraction
+
+### Column alignment at merge
+
+For downstream stages to work, QC-derived obs columns must be present and aligned across all integrated cells:
+
+- `obs.n_genes`, `obs.total_counts`, `obs.pct_counts_mt`, `obs.pct_counts_ribo` — computed in per-dataset notebooks, preserved through merge.
+- `obs.predicted_doublet`, `obs.doublet_score` — present as columns; **NaN** on cells where doublet detection was skipped (encodes "not applicable", not "missing data").
+- `obs.ambient_correction_applied` (bool) — true on cells where SoupX ran; false elsewhere.
+- `obs.phase` (S/G1/G2M) — from cell cycle scoring.
+- `obs.high_mt`, `obs.high_ribo`, `obs.stress_cell` — mark-not-filter flags (PI reviews before actual removal).
+
+### Cross-dataset QC diagnostics (Stage 02)
+
+`02_merged.ipynb` provides cross-dataset QC diagnostics:
+
+- **Violin plots** of `n_genes`, `total_counts`, `pct_counts_mt` per `source_dataset` — PI visually assesses whether distributions are broadly comparable
+- **Gene intersection analysis** — bar charts of gene counts per dataset, union vs intersection size (join="inner" ensures all downstream stages operate on shared genes)
+- **QC strategy summary table** — per-dataset `qc_report_v1` records aggregated into a single table showing strategy type, cells removed, and removal percentages
+- **QC heterogeneity flag** — `uns["merge_report_v1"]["qc_heterogeneous"] = True` when datasets used different QC strategies; downstream stages can read this flag to include appropriate disclaimers
+
+The key principle: cross-dataset QC diagnostics aim to **understand and document differences**, not to force alignment. If organoid datasets (Kim, Yue) have inherently higher MT% baselines than tissue biopsies (Nancang, Nowicki), forcing alignment would be a scientific error.
 
 ### What the framework does NOT enforce
 
-PI explicitly accepts that QC heterogeneity propagates into 04-7 results — strict cross-dataset alignment was considered and rejected:
+PI explicitly accepts that QC heterogeneity propagates into 04-7 results:
 
-- **Doublet alignment is NOT mandatory across datasets**. A dataset that ships already-doublet-removed (Tsubosaka, Nowicki, Kim) skips scrublet at 02; a raw cellranger dataset (Nancang) runs scrublet. The two datasets enter 03+ with different doublet histories. The framework does not force a "re-run scrublet on already-cleaned data to produce a comparable score" alignment step. PI accepts the resulting risk that Harmony/scVI batch correction at 04 may treat residual doublets in some datasets as `false batch effect`. Mitigation is a disclaimer in the 04 sweep report when `qc_heterogeneous=True`, not an alignment step.
-- **Ambient correction is physically gated by data availability.** SoupX requires `input.raw_path` in the manifest (the cellranger raw_feature_bc_matrix). Datasets that ship only filtered matrices cannot run SoupX — there is no way to "force align". `obs.ambient_correction_applied` records the actual situation per dataset; downstream consumers read it.
-- **08 pseudobulk DEG / 10 pseudotime** carries the same disclaimer. Pseudobulk averaging dilutes single-cell-level QC heterogeneity to some extent (multi-cell mean per sample), but cannot eliminate systematic bias when one cohort has been doublet-removed and another has not. PI accepts this risk for now; if it produces visibly biased DEG results in the GCPL pilot, alignment can be reconsidered as a per-project step.
+- **Doublet alignment is NOT mandatory across datasets**. A dataset that ships already-doublet-removed (Nowicki) skips scrublet at 01; a raw cellranger dataset (Nancang) runs scrublet. The two datasets enter 03+ with different doublet histories. PI accepts the resulting risk that Harmony/scVI batch correction at 04 may treat residual doublets in some datasets as false batch effect. Mitigation is a disclaimer in the merge report when `qc_heterogeneous=True`.
+- **Ambient correction is physically gated by data availability.** SoupX requires `input.raw_path` in the manifest. Datasets that ship only filtered matrices cannot run SoupX. `obs.ambient_correction_applied` records the actual situation per dataset.
+- **Pseudobulk DEG / pseudotime** carries the same disclaimer. Pseudobulk averaging dilutes single-cell-level QC heterogeneity, but cannot eliminate systematic bias when one cohort has been doublet-removed and another has not.
 
 ### Cross-method comparison reads QC context
 
-When 06 cross-method comparison includes original author annotations (`cell_type_original_{source_dataset}_v1`), the LLM verdict prompt is supplied with each source dataset's `qc_skipped` record so the LLM can interpret author labels in their proper QC context. For example, when comparing `cell_type_original_Tsubosaka_2023_v1 = "T cell"` (annotated on a doublet-removed matrix) against `cell_type_llm_v1 = "T cell + contaminated"` (annotated on a matrix that still contains doublets), the LLM should recognise the difference may be a QC artefact rather than a true biological disagreement. This is implemented in the `06_annotated.ipynb` LLM verdict prompt construction — not in framework code.
+When 06 cross-method comparison includes original author annotations (`cell_type_original_{source_dataset}_v1`), the LLM verdict prompt is supplied with each source dataset's QC skip record (aggregated from per-dataset `qc_report_v1` entries) so the LLM can interpret author labels in their proper QC context. This is implemented in `06_annotated.ipynb` LLM verdict prompt construction — not in framework code.
 
 ---
 
@@ -895,15 +955,22 @@ The `notebooks/` directory contains **directly runnable notebooks**, not templat
 
 ```
 notebooks/
-├── 01_loaded.ipynb              # PARAMS cell + read_with_manifest + write h5ad
-├── 02_qcd.ipynb                 # QC with manifest-driven skip logic + scrublet + SoupX (subprocess Rscript)
-├── 03_normalized.ipynb          # normalize + log + HVG
-├── 04_embedded.ipynb            # PCA + Harmony + scVI + scANVI + sweep with integration_metrics
-├── 05_clustered.ipynb           # multi-resolution Leiden + sweep
+├── 01_per_dataset/              # per-dataset independent QC (ADR-0011)
+│   ├── 01_nancang.ipynb         #   Nancang 2025 — adaptive QC + scrublet + SoupX + cell cycle + complexity
+│   ├── 01_kim.ipynb             #   Kim 2023 — organoid QC (higher MT% baseline)
+│   ├── 01_nowicki.ipynb         #   Nowicki-Osuch 2023 — adaptive + skip doublet (author pre-filtered)
+│   └── 01_yue.ipynb             #   Yue 2024 — organoid QC (higher MT% baseline)
+├── 02_merged.ipynb              # anndata.concat(join="inner") + cross-dataset diagnostics + QC report aggregation
+├── 03_normalized.ipynb          # normalize + log1p (+ optional Pearson residuals) + batch-aware HVG + HVG exclusion list + scalar-or-sweep
+├── 04_embedded.ipynb            # PCA + Harmony + scVI + scANVI; elbow plot + N_NEIGHBORS sweep + HARMONY_THETA sweep + integration metrics
+├── 05_clustered.ipynb           # multi-resolution Leiden + clustering stability (subsample ARI) + marker gene preview
 ├── 06_annotated.ipynb           # 5-method annotation + cross-method comparison + LLM verdict
-├── 06b_per_cluster.ipynb         # per-cluster deep profile
-├── 06c_subset.ipynb            # subset re-cluster (T cells / epithelial / etc.)
-└── 07/                          # downstream modules; each consumes 06 (or 6.5) output
+├── 06b_per_cluster.ipynb        # per-cluster deep profile
+├── 06c_subset.ipynb             # subset re-cluster (T cells / epithelial / etc.)
+├── _deprecated/                 # superseded by per-dataset + merge design (ADR-0011)
+│   ├── 01_loaded.ipynb          #   (deprecated) old monolithic multi-dataset load
+│   └── 02_qcd.ipynb             #   (deprecated) old monolithic post-merge QC
+└── 07_downstream/               # downstream modules; each consumes 06 (or 06c) output
     ├── deg.ipynb                    # PR-3 — sc.tl.rank_genes_groups
     ├── pseudobulk_deg.ipynb         # PR-3 — DESeq2 (subprocess Rscript)
     ├── cnv.ipynb                    # PR-3 — InferCNV (pure Python infercnvpy)
@@ -931,53 +998,100 @@ Every notebook follows the same structural template (not a code template — a s
 
 The cell sequences below are the **specification** PR-3 coder agents implement against. Each line is one notebook cell; markdown cells are prefixed `[md]`, code cells are `[code]`.
 
-#### `01_loaded.ipynb`
+#### `01_per_dataset/{dataset}.ipynb` (per-dataset independent QC)
+
+One notebook per source dataset. Each follows the same structural template with dataset-specific thresholds in the PARAMS cell. The notebook is the QC report — all diagnostic plots are output directly inline; there is no separate report layer.
 
 ```
-[md]   # 01: Multi-source ingest + obs schema standardisation
+[md]   # 01: Per-dataset ingest + QC — {dataset_name}
 [code] # === PARAMS ===
-       MANIFEST_PATH = "data/Nancang_2025/manifest.yaml"
-       OUTPUT_PATH   = "results/{project}_01_loaded_v1.h5ad"
-       RANDOM_SEED   = 42
-[code] # imports
+       MANIFEST_PATH = "data/{source_dataset}/manifest.yaml"
+       OUTPUT_PATH   = "results/01_{dataset}_v1.h5ad"
+       N_MAD_n_genes     = 3      # MAD multiplier for n_genes threshold
+       N_MAD_total_counts = 3     # MAD multiplier for total_counts threshold
+       N_MAD_pct_mt       = 2.5   # MAD multiplier for pct_mt threshold
+       ENABLE_SCRUBLET    = True  # False when manifest declares doublet_removal already done
+       ENABLE_SOUPX       = True  # False when manifest lacks raw_path
+       RSCRIPT_BIN = None         # set to Rscript path or use platform.rscript_bin()
+       SOUPX_RSCRIPT = "scripts/soupx_run.R"
+       RANDOM_SEED = 42
+[code] # imports (scanpy, scrublet, scipy, subprocess, platform)
 [code] # call read_with_manifest, inspect returned adata
-[code] # print obs.head() / var.head() / .uns keys for quick visual check
-[code] # baseline QC metrics already on obs (read_with_manifest computed them); print summary
-[code] # memory self-check: assert sp.issparse(adata.X) and adata.X.dtype == np.float32
-[code] # write h5ad with compression="lzf", del adata, gc.collect
-```
-
-#### `02_qcd.ipynb`
-
-```
-[md]   # 02: QC + filter + doublet (scrublet) + ambient (SoupX, conditional)
-[code] # === PARAMS === UPSTREAM_PATH, OUTPUT_PATH, QC thresholds, RSCRIPT_BIN, SOUPX_RSCRIPT
-[code] # imports (scanpy + subprocess/shutil/tempfile for SoupX subprocess Rscript)
-[code] # load adata + load manifest dict (for preprocessing_done / qc_overrides)
+[md]   ## Raw data overview
+[code] # print obs/var head, baseline metrics summary, obsm/uns keys
 [md]   ## QC visualisation pre-filter
-[code] # violins / scatters of n_genes / pct_mt / total_counts per source_dataset
-[md]   ## Doublet detection (skipped per-dataset based on manifest)
-[code] # for each source_dataset: if "doublet_removal" in preprocessing_done OR qc_overrides[doublet_removal].skip:
-       #     fill obs.doublet_score = NaN, predicted_doublet = False, log skip reason
+[code] # violin + scatter of n_genes / total_counts / pct_mt / pct_ribo
+       # mark-not-filter: MAD thresholds computed, high_mt/high_ribo flags set
+[md]   ## Doublet detection (conditional)
+[code] # if manifest declares doublet_removal already done:
+       #     obs.doublet_score = NaN, predicted_doublet = False, log skip reason
        # else:
-       #     sc.external.pp.scrublet(adata_per_source); fold back into main adata
-[md]   ## Ambient correction via SoupX (conditional on input.raw_path + Rscript + SoupX pkg)
+       #     scrublet per sample (10x default params), store score + boolean
+       #     plot doublet score histogram
+[md]   ## Ambient RNA correction via SoupX (conditional)
 [code] # guard 1: check adata.uns["raw_matrix_path"]
-       # guard 2: check RSCRIPT_BIN executable + SoupX R package loadable
-       # for each source_dataset with raw_path, each sample:
-       #     1. extract original barcodes, export filtered counts (10x mtx) to temp dir
-       #     2. subprocess.run([RSCRIPT_BIN, "--vanilla", SOUPX_RSCRIPT, work, filt, raw, sample_id])
-       #     3. read corrected_counts.mtx, write back to adata.X
-       #     4. obs.ambient_correction_applied = True
-       # else:
-       #     obs.ambient_correction_applied = False; log skip reason
-[md]   ## Filter
-[code] # apply min_genes / max_genes / max_pct_mt thresholds
-[md]   ## QC visualisation post-filter (for before/after comparison)
-[code] # same plots as pre-filter; PI eyeballs the change
-[code] # adata.uns["qc_skipped"] structured record (per source_dataset, per step)
-       # adata.uns["qc_heterogeneous"] = True if any skipped
-       # adata.uns["filter_v1"] = {params, cells_in, cells_out, timestamp}
+       # guard 2: check Rscript available + SoupX R package loadable
+       # for each sample with raw matrix: subprocess Rscript → read corrected counts
+       # if skipped: obs.ambient_correction_applied = False, log reason
+[md]   ## Cell cycle scoring
+[code] # sc.tl.score_genes_cell_cycle → obs.S_score, G2M_score, phase
+       # violin of S/G2M scores
+[md]   ## Gene complexity
+[code] # sc.pp.calculate_qc_metrics with log1p=True → n_genes_by_counts, log1p_total_counts
+       # scatter: n_genes vs total_counts coloured by pct_mt
+[md]   ## Special gene markers
+[code] # compute pct HBA/HBB (erythrocyte), JUN/FOS (stress), ribosomal fraction
+       # mark-not-filter: stress_cell, high_ribo flags set
+[md]   ## QC report & column alignment
+[code] # obs column cleanup: ensure all expected columns exist (NaN-fill for skipped ops)
+       # write adata.uns["qc_report_v1"] = {strategy, n_cells_in, n_cells_out, cells_removed,
+       #   pct_removed, steps_skipped, skip_reasons, N_MAD_values, timestamp}
+       # adata.uns["stage"] = "01_per_dataset"
+[code] # memory self-check: assert sp.issparse(adata.X) and adata.X.dtype == np.float32
+[code] # write h5ad, del adata, gc.collect
+```
+
+**Convention**: when adding a new dataset, copy the closest existing per-dataset notebook (e.g. copy `01_nancang.ipynb` for another tissue biopsy; copy `01_kim.ipynb` for another organoid), update the PARAMS cell with the new manifest path and dataset-specific thresholds, and add the path to `02_merged.ipynb`'s `PER_DATASET_PATHS` list.
+
+#### `02_merged.ipynb` (cross-dataset merge + diagnostics)
+
+```
+[md]   # 02: Multi-dataset merge + cross-dataset QC diagnostics
+[code] # === PARAMS ===
+       PER_DATASET_PATHS = [
+           "results/01_nancang_v1.h5ad",
+           "results/01_kim_v1.h5ad",
+           "results/01_nowicki_v1.h5ad",
+           "results/01_yue_v1.h5ad",
+       ]
+       OUTPUT_PATH = "results/02_merged_v1.h5ad"
+       JOIN_GENES = "inner"
+       MIN_SHARED_GENES = 15000
+       BATCH_KEY = "source_dataset"
+       DOWNSAMPLE_TO_MIN = False
+       OUTPUT_VERSION = 1
+       RANDOM_SEED = 42
+[code] # imports (scanpy, anndata, numpy, pandas, scipy, matplotlib)
+[md]   ## Load per-dataset h5ads
+[code] # for each path: sc.read_h5ad, collect adatas list + dataset_info table
+       # display summary: dataset name, n_cells, n_genes, QC strategy, cells_removed
+[md]   ## Gene intersection analysis
+[code] # compute gene union/intersection across all datasets
+       # bar chart: per-dataset gene counts + union vs intersection
+       # assert n_shared >= MIN_SHARED_GENES
+[md]   ## Merge (anndata.concat)
+[code] # anndata.concat(adatas, join=JOIN_GENES, label="source_dataset", keys=src_keys, index_unique="-")
+       # validate cell_id uniqueness
+       # free per-dataset adatas; gc.collect()
+[md]   ## Cross-dataset QC diagnostics
+[code] # violin plots: n_genes / total_counts / pct_counts_mt per source_dataset
+       # summary table: per source_dataset median genes, median UMI, median MT%, doublet_rate, phase distribution
+[md]   ## QC heterogeneity record
+[code] # aggregate per-dataset qc_report_v1 into uns["merge_report_v1"]
+       # fields: n_datasets, join_genes, n_shared_genes, gene_intersection_pct,
+       #          qc_heterogeneous (bool), qc_strategies (list), per_dataset_qc (dict)
+[md]   ## Optional downsampling
+[code] # if DOWNSAMPLE_TO_MIN: downsample each dataset to min cell count
 [code] # memory self-check: assert sp.issparse(adata.X) and adata.X.dtype == np.float32
 [code] # write h5ad, del adata, gc.collect
 ```

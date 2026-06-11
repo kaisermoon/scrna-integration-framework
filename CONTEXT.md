@@ -18,10 +18,25 @@ Anything else (run metadata, lineage, QC heterogeneity records, disease-ontology
 ## Where to read more
 
 - **`SPEC.md`** — implementation details: function signatures, manifest YAML schema, stage notebook cell sequences, R bridge idioms, memory discipline conventions, cross-method comparison protocol.
-- **`docs/adr/`** — architectural decisions and their rationale (0001 thin framework over scanpy / 0002 rpy2 R bridge — *superseded by 0007* / 0003 plain code over plugin systems / 0004 framework deletion log + reviewer cheatsheet / 0005 load_markers as third function / 0006 YAML manifest for dataset facts / 0007 R bridge split by tool / 0008 absorb student-code by rewriting).
+- **`docs/adr/`** — architectural decisions and their rationale (0001 thin framework over scanpy / 0002 rpy2 R bridge — *superseded by 0007* / 0003 plain code over plugin systems / 0004 framework deletion log + reviewer cheatsheet / 0005 load_markers as third function / 0006 YAML manifest for dataset facts / 0007 R bridge split by tool / 0008 absorb student-code by rewriting / 0009 de-encapsulation teaching transparency / 0010 cross-platform reproducibility / 0011 per-dataset QC notebooks).
 - **`_plan.md`** — current PR plan and project status.
 - **`_memory.md`** — active project state, recent decisions, PI todos.
 - **`README.md`** — installation, environment setup, running the GCPL pilot.
+
+## Pipeline overview
+
+```
+01_per_dataset/{dataset}.ipynb  →  per-dataset h5ad (MAD-based QC, scrublet, SoupX, cell cycle, complexity)
+02_merged.ipynb                 →  merged h5ad (anndata.concat inner join + cross-dataset diagnostics)
+03_normalized.ipynb             →  normalized h5ad (log1p + batch-aware HVG + HVG exclusion list)
+04_embedded.ipynb               →  embedded h5ad (PCA + Harmony + scVI + sweep + integration metrics)
+05_clustered.ipynb              →  clustered h5ad (multi-resolution Leiden + stability + marker preview)
+06_annotated.ipynb              →  annotated h5ad (5-method annotation + cross-method comparison + LLM verdict)
+06c_subset.ipynb                →  subset h5ad (re-cluster a specific cell-type subset)
+07_downstream/{module}.ipynb    →  downstream h5ad (DEG, pseudobulk, CNV, pathway, pseudotime, etc.)
+```
+
+Stages are file-naming conventions, not framework objects. Each stage notebook reads its upstream from a PARAMS cell, does its work, and writes one h5ad checkpoint. The pipeline is linear from 01 through 06; 07 is a fan-out of parallel downstream modules. 06c is a loop-back (subset → re-run 03-06 on the subset, reflow refined labels back to the main 06 h5ad). Old versions are never overwritten — re-runs bump the version suffix in the output filename.
 
 ## Language
 
@@ -38,6 +53,10 @@ _Avoid_: Trial, attempt, experiment.
 **Scorers**:
 Directly-callable metric functions in `scrna_integration.scorers` (ADR-0009). For notebooks: `from scrna_integration.scorers import integration_metrics`. Called directly in explicit for loops — no callbacks. Replaces the removed `sweep()` function.
 _Avoid_: Sweep function, grid search helper.
+
+**Scalar-or-Sweep**:
+A dual-mode parameter design pattern spanning stages 03-05: write a single scalar value to execute that value directly; write a Python list to automatically sweep over all values with comparison visualisations. No framework abstraction — plain `isinstance(param, list)` branching in notebook cells (ADR-0009). Scalar mode is the happy path (one clean execution); sweep mode is exploratory (PI compares outcomes to choose the best value). Applicable parameters: `N_TOP_GENES`, `HVG_FLAVOR` (03); `N_NEIGHBORS`, `HARMONY_THETA` (04); `RESOLUTIONS` (05 — always a list by convention).
+_Avoid_: Grid search, hyperparameter tuning (suggests optimisation rather than exploration), sweep function (the removed `sweep()` per ADR-0009).
 
 **Version** (of a stage h5ad):
 A re-run of a stage that produces a new h5ad file with bumped version suffix (`_v2`, `_v3`). Old versions are never overwritten — file-system convention only.
@@ -59,6 +78,10 @@ _Avoid_: Disease area, indication.
 A per-source-dataset YAML file at `data/{source_dataset}/manifest.yaml` describing how to read the raw matrix, map its obs columns, join clinical metadata, and declare preprocessing state. Manifests are project assets; they live with the data and are version-controlled.
 _Avoid_: Config, descriptor, recipe.
 
+**MAD-based QC**:
+Adaptive quality control thresholding strategy using median absolute deviation (MAD). Thresholds are computed per dataset as `median +/- N_MAD * MAD` rather than hard-coded absolute values (e.g. `median(n_genes) - 3 * MAD(n_genes)` for the lower bound). MAD is more robust to outliers than standard deviation. The `N_MAD` multiplier is the real QC tuning knob — higher values admit more cells. Default values: `N_MAD = 3` for `n_genes` and `total_counts`, `N_MAD = 2.5` for `pct_counts_mt`. Used in each per-dataset notebook under `notebooks/01_per_dataset/`.
+_Avoid_: Adaptive QC (ambiguous — MAD-based is the specific method), automatic QC.
+
 **Clinical metadata**:
 External tables (xlsx/csv) supplying patient / sample-level fields not present in the matrix. Joined into obs by manifest declaration.
 _Avoid_: Patient data, supplementary data.
@@ -67,7 +90,17 @@ _Avoid_: Patient data, supplementary data.
 Cell-type labels carried by a source dataset at ingest time. Stored in `cell_type_original_{source_dataset}_v1[_{role}]` columns, sparse across source datasets after integration.
 _Avoid_: Pre-existing annotation, prior label.
 
-**Cross-method comparison** (annotation; 中文：交叉比对):
+**batch-aware HVG**:
+Highly variable gene selection performed independently within each batch (typically `source_dataset`) rather than globally. Each batch nominates its top-N HVGs; the union is ranked by how many batches nominated each gene. This prevents technical noise genes from a single large/dominant dataset from monopolising the HVG list — a key trick for multi-dataset integration. Implemented in `03_normalized.ipynb` via `sc.pp.highly_variable_genes(adata, batch_key=HVG_BATCH_KEY)`.
+_Avoid_: Global HVG, naive HVG.
+
+**HVG exclusion list**:
+A set of gene categories excluded from the HVG set after selection because their variability reflects technical/universal cell state (metabolism, stress) rather than cell identity. Default exclusions: mitochondrial genes (MT-*), ribosomal genes (RPS*/RPL*), hemoglobin genes (HBA*/HBB*). Custom patterns (e.g. immunoglobulin IG[HKL], TCR TR[ABGD]) can be added via `CUSTOM_EXCLUDE_PATTERNS` in 03 PARAMS. Exclusion happens without backfilling — excluded genes are simply removed; to reach a precise HVG count, increase `N_TOP_GENES` accordingly.
+_Avoid_: HVG filter, gene blacklist.
+
+**clustering stability**:
+A measure of how robustly a Leiden clustering result reproduces when the input data is perturbed. Implemented as subsample ARI: randomly sample 80% of cells, re-cluster independently, compute Adjusted Rand Index between the subset clustering and the full-data clustering on the shared cells. Higher ARI means the partition is stable and not an artifact of particular cells. Computed in `05_clustered.ipynb` when `STABILITY_ENABLED=True`.
+_Avoid_: Cluster robustness, cluster reproducibility (ambiguous — stability is the specific metric). (annotation; 中文：交叉比对):
 The 06 notebook step where multiple annotation methods (default co-run: marker / mLLMCelltype / gene-set scoring; scANVI when a reference atlas exists; CellTypist as a commented-out candidate; plus original author annotations) are compared via confusion matrices, Sankey diagrams, and LLM verdicts to reach a final per-cluster cell-type assignment. Running several methods together is for cross-validation, not redundancy. Implemented in `06_annotated.ipynb`, not in framework code.
 _Avoid_: Consensus (overloaded — LLM consensus is one input to the cross-method comparison), reconciliation, crosswalk (rejected as obscure jargon).
 
