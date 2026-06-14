@@ -36,7 +36,11 @@ cd scCRAFT && pip install .
 pip uninstall -y tensorflow tensorflow-probability keras 2>/dev/null || true
 ```
 
-注意：scCRAFT 在 Apple Silicon 上的 GPU 加速依赖（torch MPS / jax-metal）可能与 Linux CUDA 不同，参考 scvi-tools 安装文档按 Mac 适配。
+### Mac 上的设备支持（已明确）
+
+- **scVI / scANVI**：在 Mac 上**默认走 CPU**。MPS 加速的数值稳定性未经充分验证，框架选择保守策略。如需尝试 MPS，在 `04_embedded` 的 `PARAMS` 中设 `DEVICE="mps"` 即可覆盖。
+- **scCRAFT**：当前安装版 `SCIntegrationModel.__init__` 中 `self.device = 'cpu'` 硬编码（CUDA 行被注释），`train_integration_model()` 不接收 device 参数。**所有平台恒走 CPU，Mac MPS 不可达**。
+- 详见 ADR-0013。
 
 ### 3. scCODA 独立环境（如需用 11_abundance 的 scCODA）
 
