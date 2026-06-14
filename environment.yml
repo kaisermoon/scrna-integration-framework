@@ -256,6 +256,12 @@ dependencies:
       - yarl==1.24.2
       - zarr==3.1.6
       - zict==3.0.0
+      # === 可选依赖（未默认启用，notebook 在包/权重未就绪时优雅跳过）===
+      # CytoTRACE2（细胞分化潜能 DL 方法，10d_pseudotime_cytotrace2.ipynb）
+      # 安装：pip install "cytotrace2-py @ git+https://github.com/digitalcytometry/cytotrace2.git#subdirectory=cytotrace2_python"
+      # 首次运行需联网下载预训练权重（~数百 MB）；权重缓存后即可离线使用
+      # 注：本依赖默认未启用，10d 在包/权重未就绪时优雅跳过
+      # - cytotrace2-py  # 可选
       # === 环境分离说明（见 ADR-0012）===
       # scCRAFT（嵌入方法，04_embedded 可选）：非 PyPI 包，需单独安装，且装后必须移除 TF：
       #   git clone https://github.com/ch2343/scCRAFT && cd scCRAFT && pip install .
