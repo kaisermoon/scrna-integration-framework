@@ -8,7 +8,7 @@ import tempfile
 
 import pytest
 
-from scrna_integration.platform import check_r_available, platform_tag, rscript_bin
+from scrna_integration.platform import check_r_available, env_check, platform_tag, rscript_bin
 
 # ---------------------------------------------------------------------------
 # 辅助：在临时目录中模拟 conda 环境目录结构
@@ -284,3 +284,24 @@ def test_check_r_available_prints_message(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "R 环境未就绪" in out
     assert "conda env create -f environment-r.yml" in out
+
+
+# ---------------------------------------------------------------------------
+# 测试：env_check() —— 环境自检（返回结构 + verbose 不崩溃）
+# ---------------------------------------------------------------------------
+
+
+def test_env_check_returns_structure():
+    """env_check 返回包含必需字段的 dict，不抛异常。"""
+    result = env_check(verbose=False)
+    assert isinstance(result, dict)
+    for key in ["platform_tag", "conda_env", "ok", "checks", "warnings", "actions"]:
+        assert key in result
+    assert isinstance(result["ok"], bool)
+    assert isinstance(result["checks"], list)
+    assert isinstance(result["actions"], list)
+
+
+def test_env_check_no_crash_verbose():
+    """verbose=True 不抛异常。"""
+    env_check(verbose=True)  # 打印不应崩溃

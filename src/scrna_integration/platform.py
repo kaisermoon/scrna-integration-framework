@@ -192,3 +192,137 @@ def check_r_available(r_env_name: str = "scrna-integration-r") -> tuple:
         return (None, False)
     print(f"✓ R 环境就绪: {path}")
     return (path, True)
+
+
+def env_check(expected_env="scrna-integration", verbose=True):
+    """诊断当前运行环境是否符合本项目期望。
+
+    检测三层：(1) 平台标识 (2) 激活的 conda 环境 (3) 关键包存在性与已知冲突。
+    遵循 ADR-0010 哲学：只诊断不修改环境——对齐决策归人。
+    给出需要的调整命令，但绝不自动执行。
+
+    设计为可在每个 notebook 的 setup cell 一行调用：
+        from scrna_integration.platform import env_check
+        env_check()
+
+    Parameters
+    ----------
+    expected_env : str
+        本 stage 期望的 conda 环境名。主流水线用 "scrna-integration"。
+    verbose : bool
+        是否打印诊断报告（默认 True）。
+
+    Returns
+    -------
+    dict
+        {platform_tag, conda_env, ok(bool), checks(list), warnings(list), actions(list)}
+    """
+    import importlib.metadata as _ilm
+    import importlib.util as _ilu
+
+    _tag = platform_tag()
+    # 当前激活的 conda 环境名
+    _conda_env = os.environ.get("CONDA_DEFAULT_ENV", "")
+    if not _conda_env:
+        _prefix = os.environ.get("CONDA_PREFIX", "")
+        _conda_env = os.path.basename(_prefix) if _prefix else "unknown"
+
+    _checks = []    # [(level, msg)]  level in {"ok","warn","error"}
+    _warnings = []
+    _actions = []   # 需要 PI 执行的调整命令
+
+    # --- 平台 ---
+    _checks.append(("ok", f"平台: {_tag}"))
+
+    # --- conda 环境匹配 ---
+    if _conda_env == expected_env:
+        _checks.append(("ok", f"conda 环境: {_conda_env}"))
+    else:
+        _checks.append(("warn", f"conda 环境: {_conda_env}（期望 {expected_env}）"))
+        _warnings.append(f"当前 conda 环境是 '{_conda_env}'，本 stage 期望 '{expected_env}'")
+        _actions.append(f"conda activate {expected_env}")
+
+    # --- 关键包检测 ---
+    def _ver(pkg):
+        try:
+            return _ilm.version(pkg)
+        except Exception:
+            return None
+
+    # 必需的核心包
+    for _pkg in ["scanpy", "anndata", "numpy"]:
+        _v = _ver(_pkg)
+        if _v:
+            _checks.append(("ok", f"{_pkg}={_v}"))
+        else:
+            _checks.append(("error", f"{_pkg} 未安装（核心依赖缺失）"))
+            _warnings.append(f"核心包 {_pkg} 缺失——环境可能不对")
+
+    # 嵌入/注释 stage 需要的包（缺失只警告不报错——不是所有 stage 都用）
+    for _pkg in ["torch", "scvi-tools"]:
+        _v = _ver(_pkg)
+        if _v:
+            _checks.append(("ok", f"{_pkg}={_v}"))
+        else:
+            _checks.append(("warn", f"{_pkg} 未安装（scVI/scANVI/scCRAFT 步骤需要）"))
+
+    # --- TF 冲突检测（主环境的关键检查）---
+    if expected_env == "scrna-integration":
+        _tf = _ver("tensorflow")
+        if _tf:
+            _checks.append(("error", f"tensorflow={_tf} 不应在主环境！"))
+            _warnings.append(
+                "检测到 tensorflow 在主环境——它的 oneDNN/MKL 与 PyTorch backward "
+                "在同进程冲突会导致 scCRAFT/scVI 训练 segfault（见 ADR-0012）"
+            )
+            _actions.append("pip uninstall -y tensorflow tensorflow-probability keras  "
+                            "# scCODA 请用 scrna-sccoda 环境")
+
+    # --- scCRAFT 可选提示 ---
+    _sccraft_installed = False
+    try:
+        _sccraft_installed = _ilu.find_spec("scCRAFT") is not None
+    except Exception:
+        pass
+    if _sccraft_installed:
+        _checks.append(("ok", "scCRAFT 已安装（04 可用 EMBEDDING_METHODS 加 'sccraft'）"))
+    else:
+        _checks.append(("warn", "scCRAFT 未安装（如需用 scCRAFT 嵌入: "
+                        "git clone https://github.com/ch2343/scCRAFT && pip install . "
+                        "&& pip uninstall -y tensorflow tensorflow-probability keras）"))
+
+    # --- 平台同步提示（Mac 首次运行）---
+    if _tag.startswith("osx"):
+        _checks.append(("warn", "macOS 平台——如首次在 Mac 运行或环境久未同步，请查看 docs/MAC-SYNC.md"))
+        _warnings.append("Mac 环境同步清单见 docs/MAC-SYNC.md（本项目最近在 Linux 做过环境调整）")
+
+    _ok = not any(level == "error" for level, _ in _checks)
+
+    if verbose:
+        print("=" * 56)
+        print(f"环境检测  |  平台 {_tag}  |  conda env: {_conda_env}")
+        print("=" * 56)
+        _icon = {"ok": "✓", "warn": "⚠️", "error": "❌"}
+        for _level, _msg in _checks:
+            print(f"  {_icon[_level]} {_msg}")
+        if _actions:
+            print("\n  需要的调整（请手动执行，本函数不自动改环境）:")
+            for _a in _actions:
+                print(f"    $ {_a}")
+        if _ok:
+            if _warnings:
+                print("\n  状态: ⚠️ 可运行但有提示（见上）")
+            else:
+                print("\n  状态: ✓ 环境就绪")
+        else:
+            print("\n  状态: ❌ 环境有问题，请先处理上方 error 项")
+        print("=" * 56)
+
+    return {
+        "platform_tag": _tag,
+        "conda_env": _conda_env,
+        "ok": _ok,
+        "checks": _checks,
+        "warnings": _warnings,
+        "actions": _actions,
+    }
