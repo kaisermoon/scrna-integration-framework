@@ -98,3 +98,5 @@ references/*
 # 例外：disease_ontology（references/disease_ontology/）跨项目共享的疾病本体，进 git
 !references/disease_ontology/
 !references/disease_ontology/**
+results/_monocle3_10b_tmp/
+results/_cytotrace2_10d_tmp/
