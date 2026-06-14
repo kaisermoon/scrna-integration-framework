@@ -22,8 +22,10 @@
 | `monocle3` | `BiocManager::install("monocle3")` 或 `remotes::install_github("cole-trapnell-lab/monocle3")` | stage7 拟时序轨迹（subprocess Rscript） | v1.4.27（依赖 r-leidenbase 已 conda 预备） |
 | `hdWGCNA` | `remotes::install_github("smorabit/hdWGCNA")` | stage7 共表达模块（subprocess Rscript） | v0.4.11（dev 分支，curl 下 tarball 装） |
 | `CellChat` | `remotes::install_github("jinworks/CellChat")` | stage7 细胞通讯（subprocess Rscript） | v2.2.0.9001 |
+| `scCRAFT` | `git clone https://github.com/ch2343/scCRAFT && cd scCRAFT && pip install .`（非 PyPI） | 04_embedded 可选嵌入方法（anchor-free VAE 批次校正） | 2026-06-13 | v0.1.0（git clone） |
 
 > 这些 R 包两平台都从源码编译，依赖 environment-r.yml 的 `compilers` 元包提供工具链。本机 Linux 装它们额外补了系统库：hdf5 / cairo / udunits2 / gdal / proj / geos + bioconductor-rhdf5\* + CRAN ggraph / tidygraph / enrichR / tester。安装命令与版本固定后写入 `scripts/install_r_github_pkgs.R`（PR-X3）供两机一键复现。
+> scCRAFT 装后需确认 TF 未被其依赖拉回（`pip uninstall -y tensorflow tensorflow-probability keras 2>/dev/null || true`）。两平台均需执行此检查（详见 ADR-0012）。
 
 ## 二点五、in-process R 桥接的双 R 版本并存（预期设计，非异常）
 
@@ -45,6 +47,24 @@
 | `rscript_bin()` | Rscript 可执行路径 | 从 `CONDA_PREFIX` 上溯派生 `{envs_dir}/scrna-integration-r/bin/Rscript`，两平台同一逻辑，无硬编码绝对路径 |
 
 > notebook 与 src 其他位置**禁止**出现 `sys.platform` / `os.uname` / `/Users/` / `/home/` 等平台分支或绝对路径。新增平台差异一律加进 platform.py 并在此登记。
+| `platform.env_check()` | 主环境误装 TF 检测 | 从 `CONDA_PREFIX` 识别当前环境 + `importlib.util.find_spec` 检测 tensorflow/keras，只诊断不修环境（ADR-0010 延伸） | 2026-06-13 |
+
+## 四、环境级隔离与约束（两平台统一）
+
+### 主环境禁装 TensorFlow（ADR-0012）
+
+TF 2.21.0 的 oneDNN/MKL runtime 与 PyTorch 2.12.0 的 MKL 在 backward pass 冲突，导致 scCRAFT/scVI 训练 C++ 层 segfault（exit 139）。两平台主环境 `scrna-integration` 均不得安装 `tensorflow`、`tensorflow-probability`、`keras`、`tensorboard`。`platform.env_check()` 在每次 notebook setup cell 自动检测此项。
+
+### scCODA 独立环境 `scrna-sccoda`
+
+scCODA（11_abundance 丰度分析）依赖 TF，与主环境隔离到独立 conda 环境 `scrna-sccoda`。
+
+| 环境 | 用途 | 关键依赖 | 环境 spec |
+|------|------|---------|-----------|
+| `scrna-integration` | 主流水线（01-10，含 scVI/scANVI/scCRAFT） | PyTorch, scvi-tools, scanpy, rpy2 | `environment.yml` |
+| `scrna-sccoda` | 11_abundance scCODA 丰度分析 | TensorFlow, scCODA | `environment-sccoda.yml`（当前 linux-64 专属） |
+
+> **跨平台差异**：`environment-sccoda.yml` 当前为 linux-64 专属（pin 了 `__linux` virtual package 及 linux 底层库如 `libgcc-ng`、`ld_impl_linux-64`）。Mac 需手动创建：`conda create -n scrna-sccoda python=3.11 -y && pip install sccoda`。详见 `docs/MAC-SYNC.md`。
 
 ---
 
