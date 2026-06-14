@@ -115,7 +115,7 @@ dependencies:
       - jsonschema-specifications==2025.9.1
       - jupyter-client==8.9.0
       - jupyter-core==5.9.1
-      - keras==3.14.1
+
       - kiwisolver==1.5.0
       - lazy-loader==0.5
       - legacy-api-wrap==1.5
@@ -208,7 +208,7 @@ dependencies:
       - rpds-py==2026.5.1
       - ruff==0.15.16
       - scanpy==1.11.5
-      - sccoda==0.1.9
+
       - scikit-image==0.26.0
       - scikit-learn==1.9.0
       - scikit-misc==0.5.2
@@ -229,10 +229,7 @@ dependencies:
       - stdlib-list==0.12.0
       - sympy==1.14.0
       - tblib==3.2.2
-      - tensorboard==2.20.0
-      - tensorboard-data-server==0.7.2
-      - tensorflow==2.21.0
-      - tensorflow-probability==0.25.0
+
       - termcolor==3.3.0
       - texttable==1.7.0
       - threadpoolctl==3.6.0
@@ -259,4 +256,13 @@ dependencies:
       - yarl==1.24.2
       - zarr==3.1.6
       - zict==3.0.0
+      # === 环境分离说明（见 ADR-0012）===
+      # scCRAFT（嵌入方法，04_embedded 可选）：非 PyPI 包，需单独安装，且装后必须移除 TF：
+      #   git clone https://github.com/ch2343/scCRAFT && cd scCRAFT && pip install .
+      #   pip uninstall -y tensorflow tensorflow-probability keras
+      #   原因：TF 的 oneDNN/MKL 与 PyTorch backward 在同进程冲突会 segfault
+      # scCODA（丰度分析，11_abundance）：已移至独立环境，见 environment-sccoda.yml
+      #   原因：scCODA 依赖 TF，与主环境的 scCRAFT/PyTorch 不能共存
+      # 重建主环境后用 scripts/env_parity.py snapshot 刷新快照，
+      # 用 python -c "from scrna_integration.platform import env_check; env_check()" 自检
       - zipp==4.1.0
