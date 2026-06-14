@@ -74,6 +74,35 @@ conda activate scrna-integration-r
 
 框架尚处 planning 阶段，暂无 CLI 入口。首期端到端验证 notebook 计划放在 `notebooks/end-to-end-pilot.ipynb`。
 
+## 多环境运行 / 计算设备
+
+项目支持三种环境的计算设备自适应：**Mac (Apple Silicon/MPS)**、**Linux 无显卡 (CPU)**、**Ubuntu (CUDA GPU)**。设备检测收口到 `platform.detect_device()`（见 ADR-0013）。
+
+### 使用方式
+
+`04_embedded` 的 `PARAMS` 中新增 `DEVICE = "auto"`。`auto` 模式自动选择最优设备：CUDA GPU > Mac 下 scVI/scANVI 走 CPU > CPU。也可显式覆盖：
+
+```python
+PARAMS = {
+    "DEVICE": "auto",     # "auto" | "cuda" | "mps" | "cpu"
+    ...
+}
+```
+
+### 三平台行为
+
+| 环境 | auto 检测结果 | scVI / scANVI | scCRAFT |
+|---|---|---|---|
+| Ubuntu + CUDA | gpu | GPU 加速 | CPU（内部硬编码） |
+| Mac + MPS | cpu（scVI/scANVI） | CPU（MPS 数值稳定性未验证，可显式 `DEVICE='mps'`） | CPU |
+| Linux 无显卡 | cpu | CPU | CPU |
+
+> **说明**：scvi-tools 1.4.2 使用 `accelerator`（`"gpu"` / `"cpu"` / `"mps"`）控制设备，非旧参数 `use_gpu`。CUDA 对应 `"gpu"`。scCRAFT 当前安装版 `self.device = 'cpu'` 硬编码，所有平台恒走 CPU。Mac 下如需尝试 MPS，在 PARAMS 设 `DEVICE="mps"` 即可覆盖默认 CPU 策略。
+
+### 环境安装
+
+`environment.yml` 的 torch pin **不带平台后缀**（如 `pytorch=2.12.0=*_0`），各平台 `pip install` 自动安装对应 variant（CUDA / MPS / CPU）。生产部署（Ubuntu CUDA）通过 `git pull` / PR 同步代码，跨机环境对齐用 `scripts/env_parity.py`（见 ADR-0010）。详见 [ADR-0013](docs/adr/0013-device-adaptive-layer.md)。
+
 ## 标记物库
 
 框架提供标记物库（`references/markers/`），用于管理细胞类型与标记基因的对应关系。标记物库由 PI（消化科专家）维护，框架**不预置任何真实标记物基因**——所有标记物内容由 PI 亲自填写。

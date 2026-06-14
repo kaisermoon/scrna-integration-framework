@@ -8,7 +8,9 @@ import tempfile
 
 import pytest
 
-from scrna_integration.platform import check_r_available, env_check, platform_tag, rscript_bin
+from scrna_integration.platform import (
+    check_r_available, detect_device, env_check, platform_tag, rscript_bin,
+)
 
 # ---------------------------------------------------------------------------
 # 辅助：在临时目录中模拟 conda 环境目录结构
@@ -295,7 +297,7 @@ def test_env_check_returns_structure():
     """env_check 返回包含必需字段的 dict，不抛异常。"""
     result = env_check(verbose=False)
     assert isinstance(result, dict)
-    for key in ["platform_tag", "conda_env", "ok", "checks", "warnings", "actions"]:
+    for key in ["platform_tag", "conda_env", "ok", "checks", "warnings", "actions", "device"]:
         assert key in result
     assert isinstance(result["ok"], bool)
     assert isinstance(result["checks"], list)
@@ -344,3 +346,115 @@ def test_env_check_sccoda_env_no_tf_conflict(monkeypatch):
     result = _plat.env_check(expected_env="scrna-sccoda", verbose=False)
     # scCODA 环境本就该有 TF，不触发 TF 冲突 error
     assert not any("不应在主环境" in str(c) for c in result["checks"])
+
+
+# ---------------------------------------------------------------------------
+# 测试：detect_device() —— 计算设备自适应检测（ADR-0013）
+# ---------------------------------------------------------------------------
+
+
+class _MockMPSBackend:
+    """mock torch.backends.mps，供 MPS 相关测试使用。"""
+    @staticmethod
+    def is_available():
+        return True
+
+
+def test_detect_device_cuda_available(monkeypatch):
+    """cuda 可用 → accelerator=="gpu", device_str=="cuda"."""
+    from scrna_integration.platform import detect_device
+
+    monkeypatch.setattr("torch.cuda.is_available", lambda: True)
+
+    result = detect_device()
+    assert result["accelerator"] == "gpu"
+    assert result["device_str"] == "cuda"
+    assert result["devices"] == "auto"
+
+
+def test_detect_device_mps_scvi_fallback_to_cpu(monkeypatch):
+    """cuda=False/mps=True/for_method='scvi' → accelerator=='cpu'."""
+    import torch
+    from scrna_integration.platform import detect_device
+
+    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+    monkeypatch.setattr(torch.backends, "mps", _MockMPSBackend, raising=False)
+
+    result = detect_device(prefer="auto", for_method="scvi")
+    assert result["accelerator"] == "cpu"
+    assert result["device_str"] == "cpu"
+    assert "scVI" in result["reason"]
+
+
+def test_detect_device_mps_no_method_uses_mps(monkeypatch):
+    """cuda=False/mps=True/for_method=None → accelerator=='mps'."""
+    import torch
+    from scrna_integration.platform import detect_device
+
+    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+    monkeypatch.setattr(torch.backends, "mps", _MockMPSBackend, raising=False)
+
+    result = detect_device(prefer="auto", for_method=None)
+    assert result["accelerator"] == "mps"
+    assert result["device_str"] == "mps"
+
+
+def test_detect_device_neither_gpu_nor_mps(monkeypatch):
+    """cuda=False/mps=False → accelerator=='cpu', device_str=='cpu'."""
+    from scrna_integration.platform import detect_device
+
+    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+
+    result = detect_device()
+    assert result["accelerator"] == "cpu"
+    assert result["device_str"] == "cpu"
+
+
+def test_detect_device_torch_missing(monkeypatch):
+    """torch 缺失（ImportError）→ cpu + reason 含 'torch 未安装'."""
+    import sys
+    from scrna_integration.platform import detect_device
+
+    # 将 sys.modules 中的 torch 设为 None，模拟未安装
+    monkeypatch.setitem(sys.modules, "torch", None)
+    result = detect_device()
+    assert result["accelerator"] == "cpu"
+    assert result["device_str"] == "cpu"
+    assert "torch 未安装" in result["reason"]
+
+
+def test_detect_device_prefer_cpu_overrides_cuda(monkeypatch):
+    """prefer='cpu' 即使 cuda 可用仍返回 cpu."""
+    from scrna_integration.platform import detect_device
+
+    monkeypatch.setattr("torch.cuda.is_available", lambda: True)
+
+    result = detect_device(prefer="cpu")
+    assert result["accelerator"] == "cpu"
+    assert result["device_str"] == "cpu"
+    assert "显式指定 CPU" in result["reason"]
+
+
+def test_detect_device_prefer_cuda_unavailable_fallback(monkeypatch):
+    """prefer='cuda' 但 cuda=False → 降级 cpu，reason 含警告."""
+    from scrna_integration.platform import detect_device
+
+    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+
+    result = detect_device(prefer="cuda")
+    assert result["accelerator"] == "cpu"
+    assert result["device_str"] == "cpu"
+    assert "不可用" in result["reason"]
+
+
+def test_detect_device_return_keys():
+    """返回 dict 含 accelerator/devices/device_str/reason 四字段."""
+    from scrna_integration.platform import detect_device
+
+    result = detect_device()
+    for key in ["accelerator", "devices", "device_str", "reason"]:
+        assert key in result, f"缺少字段: {key}"
+    assert isinstance(result["accelerator"], str)
+    assert isinstance(result["device_str"], str)
+    assert isinstance(result["reason"], str)
+    assert result["accelerator"] in ("gpu", "cpu", "mps")

@@ -48,6 +48,7 @@
 
 > notebook 与 src 其他位置**禁止**出现 `sys.platform` / `os.uname` / `/Users/` / `/home/` 等平台分支或绝对路径。新增平台差异一律加进 platform.py 并在此登记。
 | `platform.env_check()` | 主环境误装 TF 检测 | 从 `CONDA_PREFIX` 识别当前环境 + `importlib.util.find_spec` 检测 tensorflow/keras，只诊断不修环境（ADR-0010 延伸） | 2026-06-13 |
+| `platform.detect_device()` | 计算设备（CUDA / MPS / CPU）三环境自适应 | 三环境自适应：auto 模式 CUDA→gpu > Mac scVI/scANVI→cpu > cpu；显式 `DEVICE=cuda\|mps\|cpu` 覆盖；scVI/scANVI Mac 默认 CPU（MPS 数值稳定性未验证），scCRAFT 恒 CPU；见 ADR-0013 | 2026-06-14 |
 
 ## 四、环境级隔离与约束（两平台统一）
 

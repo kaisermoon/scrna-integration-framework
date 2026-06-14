@@ -16,6 +16,7 @@ revised: 2026-06-10  # conda-lock 方案被 env_parity 诊断脚本方案取代�
 1. **现有 `environment.yml` / `environment-r.yml` / `pyproject.toml` 全部用 `>=` 松约束**（`numpy>=1.24`、`scanpy>=1.10`、`r-base>=4.3` …）。松约束在「一份 spec、两台机器各自 solve」的场景下，几乎必然解出不同的版本组合——这不是装的时候小心就能避免，是 spec 本身没有锁定能力。`>=` 表达的是「库作者声明的兼容下界」（抽象依赖），不是「可复现的具体环境」（锁定依赖），两者职责不同。
 2. **服务器 Linux 环境从零重建**：`miniforge3/envs/` 为空，`scrna-integration` 与 `scrna-integration-r` 都需在 Linux 上新建。
 3. **GPU 分歧不存在**：Linux 服务器无 NVIDIA GPU，Mac 也无 CUDA，两边 PyTorch / scVI 都跑 CPU build。跨平台最大的常见坑（CUDA vs CPU vs MPS 的不同 build）在本项目天然不存在，对齐难度大幅下降。
+    > 注：此前提在引入 Ubuntu-CUDA 生产环境后失效，device 自适应见 ADR-0013。
 4. **conda 环境目录不在 Syncthing 同步范围**（项目目录在同步范围，但 `miniforge3/` 在范围外）。这是必须固守的安全状态：conda 环境内是平台相关的编译二进制，arm64 的 `.so`/`.dylib` 在 linux-64 无法运行，跨平台同步环境目录会直接损坏环境。
 5. **代码层已存在不一致**：`stage2_qcd.ipynb` 从 `CONDA_PREFIX` 派生 `RSCRIPT_BIN`（带 Mac 硬编码 fallback），而 `stage7/*.ipynb` 直接写死 `RSCRIPT_BIN = "Rscript"`（靠 PATH）。同一约定两种写法，且其一含 Mac 绝对路径——换到 Linux 即失效。
 

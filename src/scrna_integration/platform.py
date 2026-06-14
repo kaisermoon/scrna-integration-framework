@@ -1,9 +1,13 @@
-"""平台环境检测与路径解析（ADR-0010：OS 检测单点收口）。
+"""平台环境检测与路径解析（ADR-0010：OS 检测单点收口；ADR-0013：device 自适应层）。
 
 本模块是框架中**唯一**允许感知操作系统/平台差异的位置。
 所有其他模块（src/ 其余代码、notebooks/）**禁止**直接使用
 ``sys.platform``、``os.uname`` 或硬编码平台绝对路径（``/Users/``、
 ``/home/`` 等）；需要平台相关路径时统一通过本模块获取。
+
+自 ADR-0013 起，计算设备检测（CUDA / MPS / CPU）也收口至本模块的
+:func:`detect_device`，notebook/src 其他位置不再自行判断
+``torch.cuda.is_available()`` 或 ``torch.backends.mps``。
 
 为什么需要这个模块？
 --------------------
@@ -194,11 +198,136 @@ def check_r_available(r_env_name: str = "scrna-integration-r") -> tuple:
     return (path, True)
 
 
-def env_check(expected_env="scrna-integration", verbose=True):
+def detect_device(prefer="auto", for_method=None):
+    """检测当前计算设备并返回训练配置参数。
+
+    根据 ADR-0013，统一收口设备检测逻辑，支持 Mac-MPS / Linux-CPU /
+    Ubuntu-CUDA 三环境自适应。返回的 dict 可直接解包喂给
+    ``scvi.model.SCVI.train(accelerator=..., devices=...)``。
+
+    检测优先级：
+    1. try import torch（局部 import）；ImportError → 回退 CPU
+    2. CUDA 可用 > MPS 可用 > CPU
+    3. 显式 ``prefer`` 参数可覆盖自动检测
+    4. ``for_method`` 允许方法级默认行为（scVI/scANVI 在 Mac 上默认
+       走 CPU 而非 MPS，因 MPS 数值稳定性未经验证）
+
+    参数
+    ----------
+    prefer : str
+        显式设备偏好。合法值：
+        - ``"auto"``（默认）——自动检测
+        - ``"cuda"``——强制 CUDA GPU
+        - ``"mps"``——强制 Apple MPS
+        - ``"cpu"``——强制 CPU
+        非法值视为 ``"auto"`` 并在 reason 中注明。
+    for_method : str or None
+        调用方方法名（``"scvi"`` / ``"scanvi"`` / ``"sccraft"``），
+        用于 auto 模式下的方法级默认行为。None 表示不区分方法。
+
+    返回
+    -------
+    dict
+        - ``"accelerator"`` (str) —— ``"gpu"`` / ``"cpu"`` / ``"mps"``，
+          直接传给 ``model.train(accelerator=...)``
+        - ``"devices"`` (object) —— ``"auto"`` / ``1`` / ``[0]``，
+          直接传给 ``model.train(devices=...)``
+        - ``"device_str"`` (str) —— ``"cuda"`` / ``"mps"`` / ``"cpu"``
+          （torch 风格，日志用）
+        - ``"reason"`` (str) —— 中文决策说明
+
+    使用示例
+    --------
+    >>> from scrna_integration.platform import detect_device
+    >>> _dev = detect_device("auto", for_method="scvi")
+    >>> model.train(accelerator=_dev["accelerator"], devices=_dev["devices"])
+    """
+    # 1) 局部 import torch（支持测试 monkeypatch）
+    try:
+        import torch
+    except ImportError:
+        return {
+            "accelerator": "cpu",
+            "devices": "auto",
+            "device_str": "cpu",
+            "reason": "torch 未安装，回退 CPU",
+        }
+
+    cuda_ok = torch.cuda.is_available()
+    # 注意：torch.backends.mps 仅在 macOS PyTorch >= 1.12 存在
+    mps_ok = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+
+    # --- 合法值校验 ---
+    _valid = {"auto", "cuda", "mps", "cpu"}
+    _prefer = prefer
+    if _prefer not in _valid:
+        _prefer = "auto"
+
+    # 2) 显式 prefer 覆盖
+    if _prefer == "cuda":
+        if cuda_ok:
+            return {"accelerator": "gpu", "devices": "auto",
+                    "device_str": "cuda", "reason": "显式指定 CUDA"}
+        else:
+            return {"accelerator": "cpu", "devices": "auto",
+                    "device_str": "cpu",
+                    "reason": "请求 CUDA 但不可用，回退 CPU"}
+
+    if _prefer == "mps":
+        if mps_ok:
+            return {"accelerator": "mps", "devices": "auto",
+                    "device_str": "mps", "reason": "显式指定 MPS"}
+        else:
+            return {"accelerator": "cpu", "devices": "auto",
+                    "device_str": "cpu",
+                    "reason": "请求 MPS 但不可用，回退 CPU"}
+
+    if _prefer == "cpu":
+        return {"accelerator": "cpu", "devices": "auto",
+                "device_str": "cpu",
+                "reason": "显式指定 CPU"}
+
+    # 3) auto 模式
+    # 非法 prefer 已在上面被转为 auto，此处只追加注记
+    _note = f"（prefer={prefer!r} 非法，已按 auto 处理）" if prefer not in _valid else ""
+
+    if cuda_ok:
+        return {"accelerator": "gpu", "devices": "auto",
+                "device_str": "cuda",
+                "reason": "检测到 CUDA GPU" + _note}
+
+    if mps_ok:
+        if for_method in ("scvi", "scanvi"):
+            return {
+                "accelerator": "cpu", "devices": "auto",
+                "device_str": "cpu",
+                "reason": (
+                    "Mac/MPS：scVI/scANVI 默认 CPU"
+                    "（MPS 数值稳定性未验证），如需 MPS 请显式 DEVICE='mps'"
+                ) + _note,
+            }
+        if for_method == "sccraft":
+            return {
+                "accelerator": "cpu", "devices": "auto",
+                "device_str": "cpu",
+                "reason": "scCRAFT 内部硬编码 CPU，device 不可控（见 ADR-0013）" + _note,
+            }
+        # for_method is None → MPS OK
+        return {"accelerator": "mps", "devices": "auto",
+                "device_str": "mps",
+                "reason": "Mac 检测到 MPS（具体方法可能回退 CPU）" + _note}
+
+    # 4) 无 GPU / 无 MPS
+    return {"accelerator": "cpu", "devices": "auto",
+            "device_str": "cpu",
+            "reason": "未检测到 GPU/MPS，使用 CPU" + _note}
+
+
+def env_check(expected_env="scrna-integration", verbose=True, device_prefer="auto"):
     """诊断当前运行环境是否符合本项目期望。
 
-    检测三层：(1) 平台标识 (2) 激活的 conda 环境 (3) 关键包存在性与已知冲突。
-    遵循 ADR-0010 哲学：只诊断不修改环境——对齐决策归人。
+    检测三层：(1) 平台标识 (2) 激活的 conda 环境 (3) 关键包存在性与已知冲突
+    (4) 计算设备自适应检测。遵循 ADR-0010 哲学：只诊断不修改环境——对齐决策归人。
     给出需要的调整命令，但绝不自动执行。
 
     设计为可在每个 notebook 的 setup cell 一行调用：
@@ -211,11 +340,16 @@ def env_check(expected_env="scrna-integration", verbose=True):
         本 stage 期望的 conda 环境名。主流水线用 "scrna-integration"。
     verbose : bool
         是否打印诊断报告（默认 True）。
+    device_prefer : str
+        传给 :func:`detect_device` 的设备偏好（默认 ``"auto"``）。
+        当 notebook 显式指定了 ``DEVICE="cpu"`` 等值时，传入相同值可使
+        env_check 显示的设备与后续训练保持一致。
 
     Returns
     -------
     dict
-        {platform_tag, conda_env, ok(bool), checks(list), warnings(list), actions(list)}
+        {platform_tag, conda_env, ok(bool), checks(list), warnings(list),
+         actions(list), device(str|None)}
     """
     import importlib.metadata as _ilm
     import importlib.util as _ilu
@@ -265,6 +399,15 @@ def env_check(expected_env="scrna-integration", verbose=True):
             _checks.append(("ok", f"{_pkg}={_v}"))
         else:
             _checks.append(("warn", f"{_pkg} 未安装（scVI/scANVI/scCRAFT 步骤需要）"))
+
+    # --- 计算设备检测（复用 detect_device，仅诊断）---
+    _device_str = None
+    try:
+        _dev = detect_device(prefer=device_prefer)
+        _checks.append(("ok", f"计算设备: {_dev['device_str']}（{_dev['reason']}）"))
+        _device_str = _dev["device_str"]
+    except Exception as _e:
+        _checks.append(("warn", f"设备检测跳过: {_e}"))
 
     # --- TF 冲突检测（主环境的关键检查）---
     if expected_env == "scrna-integration":
@@ -330,4 +473,5 @@ def env_check(expected_env="scrna-integration", verbose=True):
         "checks": _checks,
         "warnings": _warnings,
         "actions": _actions,
+        "device": _device_str,
     }
