@@ -55,6 +55,10 @@
 conda env create -f environment.yml
 conda activate scrna-integration
 
+# scCODA 丰度差异分析环境（固定命名 scrna-sccoda；可选，仅需 scCODA 时安装）
+conda env create -f environment-sccoda.yml
+conda activate scrna-sccoda
+
 # R 环境（固定命名 scrna-integration-r；可选，仅需下游 R 工具时安装）
 conda env create -f environment-r.yml
 conda activate scrna-integration-r
@@ -62,6 +66,8 @@ conda activate scrna-integration-r
 
 开发安装（轻量，仅 pytest/ruff/pre-commit）：`conda activate scrna-integration && pip install -e ".[dev]" && pre-commit install`。完整重装流程先确保已激活 `scrna-integration` 环境。
 
+> **环境分离说明**：`scrna-integration`（主环境）为保持 scCRAFT 训练稳定已移除 TensorFlow。scCODA 依赖 TF，因此独立为 `scrna-sccoda`——TF 的 oneDNN/MKL 与 PyTorch 同进程 backward 时存在冲突 segfault。完整分析流程中，scVI/scCRAFT 步骤用主环境，scCODA 丰度分析步骤切换到 `scrna-sccoda`。
+>
 > **R 重型包单独安装**：Monocle3、hdWGCNA 等无 conda 预编译包，需在激活 `scrna-integration-r` 环境后进入 R 单独安装——`BiocManager::install("monocle3")` / `remotes::install_github("smorabit/hdWGCNA")`。详见 `environment-r.yml` 注释。
 
 ## 运行
