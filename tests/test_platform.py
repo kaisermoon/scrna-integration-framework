@@ -305,3 +305,42 @@ def test_env_check_returns_structure():
 def test_env_check_no_crash_verbose():
     """verbose=True 不抛异常。"""
     env_check(verbose=True)  # 打印不应崩溃
+
+
+# ---------------------------------------------------------------------------
+# 测试：env_check() TF 冲突与 keras 残留检测
+# ---------------------------------------------------------------------------
+
+
+def test_env_check_tf_conflict_detected(monkeypatch):
+    """主环境检测到 tensorflow 时应报 error（ok=False）。"""
+    import importlib.metadata as _ilm
+    from scrna_integration import platform as _plat
+    _orig = _ilm.version
+
+    def _fake_version(pkg):
+        if pkg == "tensorflow":
+            return "2.21.0"
+        return _orig(pkg)
+
+    monkeypatch.setattr(_ilm, "version", _fake_version)
+    result = _plat.env_check(expected_env="scrna-integration", verbose=False)
+    assert result["ok"] is False
+    assert any("tensorflow" in w.lower() for w in result["warnings"])
+
+
+def test_env_check_sccoda_env_no_tf_conflict(monkeypatch):
+    """非主环境（如 scrna-sccoda）有 TF 不应报 error。"""
+    import importlib.metadata as _ilm
+    from scrna_integration import platform as _plat
+    _orig = _ilm.version
+
+    def _fake_version(pkg):
+        if pkg == "tensorflow":
+            return "2.21.0"
+        return _orig(pkg)
+
+    monkeypatch.setattr(_ilm, "version", _fake_version)
+    result = _plat.env_check(expected_env="scrna-sccoda", verbose=False)
+    # scCODA 环境本就该有 TF，不触发 TF 冲突 error
+    assert not any("不应在主环境" in str(c) for c in result["checks"])

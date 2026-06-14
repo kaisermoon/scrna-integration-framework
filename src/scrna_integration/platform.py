@@ -246,7 +246,7 @@ def env_check(expected_env="scrna-integration", verbose=True):
     def _ver(pkg):
         try:
             return _ilm.version(pkg)
-        except Exception:
+        except _ilm.PackageNotFoundError:
             return None
 
     # 必需的核心包
@@ -269,6 +269,7 @@ def env_check(expected_env="scrna-integration", verbose=True):
     # --- TF 冲突检测（主环境的关键检查）---
     if expected_env == "scrna-integration":
         _tf = _ver("tensorflow")
+        _keras = _ver("keras")
         if _tf:
             _checks.append(("error", f"tensorflow={_tf} 不应在主环境！"))
             _warnings.append(
@@ -277,6 +278,10 @@ def env_check(expected_env="scrna-integration", verbose=True):
             )
             _actions.append("pip uninstall -y tensorflow tensorflow-probability keras  "
                             "# scCODA 请用 scrna-sccoda 环境")
+        elif _keras:
+            # keras 3.x 可独立于 TF，但残留可能引入混淆/依赖——提示清理
+            _checks.append(("warn", f"keras={_keras} 残留（tensorflow 已移除，建议一并清理）"))
+            _actions.append("pip uninstall -y keras")
 
     # --- scCRAFT 可选提示 ---
     _sccraft_installed = False
