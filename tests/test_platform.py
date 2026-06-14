@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 import tempfile
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -353,18 +355,14 @@ def test_env_check_sccoda_env_no_tf_conflict(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-class _MockMPSBackend:
-    """mock torch.backends.mps，供 MPS 相关测试使用。"""
-    @staticmethod
-    def is_available():
-        return True
-
 
 def test_detect_device_cuda_available(monkeypatch):
     """cuda 可用 → accelerator=="gpu", device_str=="cuda"."""
     from scrna_integration.platform import detect_device
 
-    monkeypatch.setattr("torch.cuda.is_available", lambda: True)
+    mock_torch = MagicMock()
+    mock_torch.cuda.is_available.return_value = True
+    monkeypatch.setitem(sys.modules, "torch", mock_torch)
 
     result = detect_device()
     assert result["accelerator"] == "gpu"
@@ -374,11 +372,12 @@ def test_detect_device_cuda_available(monkeypatch):
 
 def test_detect_device_mps_scvi_fallback_to_cpu(monkeypatch):
     """cuda=False/mps=True/for_method='scvi' → accelerator=='cpu'."""
-    import torch
     from scrna_integration.platform import detect_device
 
-    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
-    monkeypatch.setattr(torch.backends, "mps", _MockMPSBackend, raising=False)
+    mock_torch = MagicMock()
+    mock_torch.cuda.is_available.return_value = False
+    mock_torch.backends.mps.is_available.return_value = True
+    monkeypatch.setitem(sys.modules, "torch", mock_torch)
 
     result = detect_device(prefer="auto", for_method="scvi")
     assert result["accelerator"] == "cpu"
@@ -388,11 +387,12 @@ def test_detect_device_mps_scvi_fallback_to_cpu(monkeypatch):
 
 def test_detect_device_mps_no_method_uses_mps(monkeypatch):
     """cuda=False/mps=True/for_method=None → accelerator=='mps'."""
-    import torch
     from scrna_integration.platform import detect_device
 
-    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
-    monkeypatch.setattr(torch.backends, "mps", _MockMPSBackend, raising=False)
+    mock_torch = MagicMock()
+    mock_torch.cuda.is_available.return_value = False
+    mock_torch.backends.mps.is_available.return_value = True
+    monkeypatch.setitem(sys.modules, "torch", mock_torch)
 
     result = detect_device(prefer="auto", for_method=None)
     assert result["accelerator"] == "mps"
@@ -403,7 +403,10 @@ def test_detect_device_neither_gpu_nor_mps(monkeypatch):
     """cuda=False/mps=False → accelerator=='cpu', device_str=='cpu'."""
     from scrna_integration.platform import detect_device
 
-    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+    mock_torch = MagicMock()
+    mock_torch.cuda.is_available.return_value = False
+    mock_torch.backends.mps.is_available.return_value = False
+    monkeypatch.setitem(sys.modules, "torch", mock_torch)
 
     result = detect_device()
     assert result["accelerator"] == "cpu"
@@ -427,7 +430,9 @@ def test_detect_device_prefer_cpu_overrides_cuda(monkeypatch):
     """prefer='cpu' 即使 cuda 可用仍返回 cpu."""
     from scrna_integration.platform import detect_device
 
-    monkeypatch.setattr("torch.cuda.is_available", lambda: True)
+    mock_torch = MagicMock()
+    mock_torch.cuda.is_available.return_value = True
+    monkeypatch.setitem(sys.modules, "torch", mock_torch)
 
     result = detect_device(prefer="cpu")
     assert result["accelerator"] == "cpu"
@@ -439,7 +444,9 @@ def test_detect_device_prefer_cuda_unavailable_fallback(monkeypatch):
     """prefer='cuda' 但 cuda=False → 降级 cpu，reason 含警告."""
     from scrna_integration.platform import detect_device
 
-    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+    mock_torch = MagicMock()
+    mock_torch.cuda.is_available.return_value = False
+    monkeypatch.setitem(sys.modules, "torch", mock_torch)
 
     result = detect_device(prefer="cuda")
     assert result["accelerator"] == "cpu"

@@ -91,11 +91,13 @@ PARAMS = {
 
 ### 三平台行为
 
-| 环境 | auto 检测结果 | scVI / scANVI | scCRAFT |
+| 环境 | auto 检测结果 | scVI / scANVI | scCRAFT* |
 |---|---|---|---|
 | Ubuntu + CUDA | gpu | GPU 加速 | CPU（内部硬编码） |
 | Mac + MPS | cpu（scVI/scANVI） | CPU（MPS 数值稳定性未验证，可显式 `DEVICE='mps'`） | CPU |
 | Linux 无显卡 | cpu | CPU | CPU |
+
+> \* scCRAFT 内部硬编码 CPU（MPS 不可达）；对比 scVI/scANVI 虽 MPS 代码路径存在，但在 Mac 下默认选用 CPU（MPS 数值稳定性未验证）。
 
 > **说明**：scvi-tools 1.4.2 使用 `accelerator`（`"gpu"` / `"cpu"` / `"mps"`）控制设备，非旧参数 `use_gpu`。CUDA 对应 `"gpu"`。scCRAFT 当前安装版 `self.device = 'cpu'` 硬编码，所有平台恒走 CPU。Mac 下如需尝试 MPS，在 PARAMS 设 `DEVICE="mps"` 即可覆盖默认 CPU 策略。
 
