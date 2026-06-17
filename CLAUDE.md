@@ -63,6 +63,7 @@ updated: "2026-06-10"
 - **conda 环境隔离**：所有装包在专用 `scrna-integration` / `scrna-integration-r`，绝不动 base。多 worktree 共享环境用 `PYTHONPATH=src pytest`，禁止 `pip install -e .`（editable 会互相覆盖）。
 - **注释中文 + 充分讲 why**（ADR-0009，面向 PI + 非计算机专业学生）。
 - **薄框架 + 教学透明**（ADR-0001/0003/0004/0009）：新增任何 helper/抽象，判据是"非 CS 学生打开 notebook 能否逐行看懂"，不只是"填了 scanpy 空白"。
+- **支持运行平台（兼容性硬目标）**：同一套代码必须在以下环境直接运行，不靠改代码切换。① macOS（osx-arm64，Apple Silicon；MPS 或 CPU）② Linux x86-64 服务器，发行版 **Ubuntu 与 CentOS 均须支持** ③ Linux **有无 NVIDIA CUDA 均须支持**——有 CUDA 走 GPU，无 CUDA 自动降级 CPU。设备选择由 `platform.detect_device()` 单点收口（ADR-0013）；发行版差异（Ubuntu/CentOS）由 conda `linux-64` 包统一吸收，代码层不写发行版判断；CUDA 有无由运行时检测，源 spec 不写死 CUDA build（torch CPU variant 两平台通用，GPU 机用 `scripts/setup_cuda.sh` 替换为对应 cuXXX variant）。
 - **跨平台一致性**（ADR-0010）：项目同时跑在 Mac（osx-arm64）+ Linux 服务器（linux-64）。① 版本一致靠 **精确 pin 源 spec + env_parity 诊断脚本 + 人工对齐**（源 spec 用 `==` pin 作为期望基准，两机 `conda env create -f environment.yml` 直接安装，`scripts/env_parity.py snapshot` 留快照，`compare` 出差异供人工决定对齐）② 无法对齐的极少数包登记 `docs/cross-platform-exceptions.md`（异常非常态）③ OS 检测**只能**写在 `src/scrna_integration/platform.py`，notebook/src 其他位置禁出现 `sys.platform`/`os.uname`/平台绝对路径（`/Users/`、`/home/`）④ **conda 环境目录永不进 Syncthing/git**，只同步源 spec+platform.py+异常表+快照 JSON。reviewer 卡这四条。
 
 ## 五、关键文件指针
