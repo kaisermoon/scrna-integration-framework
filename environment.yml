@@ -236,6 +236,12 @@ dependencies:
       - tifffile==2026.3.3
       - toolz==1.1.0
       - torch==2.12.0
+      # pip 默认装 CPU-only wheel，支持 Mac(MPS) 和 Linux CPU。
+      # Linux CUDA 机器: conda env create 后运行 scripts/setup_cuda.sh 替换为 cu126 variant。
+      # 原因: conda-forge pytorch 2.12.0 无 cuda126 build(仅 cuda129/cuda130)，
+      # cuda129 要求 driver >=570，本项目常用 driver 560 仅支持到 CUDA 12.6。
+      # cytotrace2-py 已隔离至独立环境 scrna-cytotrace2（numpy<2.0 vs scCRAFT/jax>=2.0 冲突）。
+      # 详见 environment-cytotrace2.yml 和 docs/cross-platform-exceptions.md。
       - torchmetrics==1.9.0
       - tornado==6.5.6
       - tqdm==4.68.1
@@ -258,10 +264,9 @@ dependencies:
       - zict==3.0.0
       # === 可选依赖（未默认启用，notebook 在包/权重未就绪时优雅跳过）===
       # CytoTRACE2（细胞分化潜能 DL 方法，10d_pseudotime_cytotrace2.ipynb）
-      # 安装：pip install "cytotrace2-py @ git+https://github.com/digitalcytometry/cytotrace2.git#subdirectory=cytotrace2_python"
-      # 首次运行需联网下载预训练权重（~数百 MB）；权重缓存后即可离线使用
-      # 注：本依赖默认未启用，10d 在包/权重未就绪时优雅跳过
-      # - cytotrace2-py  # 可选
+      # 已隔离至独立环境 scrna-cytotrace2（numpy<2.0 vs scCRAFT/jax>=2.0 冲突）。
+      # 安装：conda env create -f environment-cytotrace2.yml
+      # 详见 docs/cross-platform-exceptions.md
       # === 环境分离说明（见 ADR-0012）===
       # scCRAFT（嵌入方法，04_embedded 可选）：非 PyPI 包，需单独安装，且装后必须移除 TF：
       #   git clone https://github.com/ch2343/scCRAFT && cd scCRAFT && pip install .

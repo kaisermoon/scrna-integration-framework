@@ -59,10 +59,19 @@ conda activate scrna-integration
 conda env create -f environment-sccoda.yml
 conda activate scrna-sccoda
 
+# CytoTRACE2 环境（固定命名 scrna-cytotrace2；可选，仅需 CytoTRACE2 时安装）
+conda env create -f environment-cytotrace2.yml
+conda activate scrna-cytotrace2
+
 # R 环境（固定命名 scrna-integration-r；可选，仅需下游 R 工具时安装）
 conda env create -f environment-r.yml
 conda activate scrna-integration-r
 ```
+
+# Linux CUDA 机器额外步骤（替换 CPU torch 为 CUDA variant）：
+bash scripts/setup_cuda.sh
+# 若验证显示 CUDA not available，手动补装运行时库：
+#   pip install --index-url https://download.pytorch.org/whl/cu126 nvidia-cublas-cu12 nvidia-cudnn-cu12
 
 开发安装（轻量，仅 pytest/ruff/pre-commit）：`conda activate scrna-integration && pip install -e ".[dev]" && pre-commit install`。完整重装流程先确保已激活 `scrna-integration` 环境。
 

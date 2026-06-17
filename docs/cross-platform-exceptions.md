@@ -63,9 +63,45 @@ scCODA（11_abundance 丰度分析）依赖 TF，与主环境隔离到独立 con
 | 环境 | 用途 | 关键依赖 | 环境 spec |
 |------|------|---------|-----------|
 | `scrna-integration` | 主流水线（01-10，含 scVI/scANVI/scCRAFT） | PyTorch, scvi-tools, scanpy, rpy2 | `environment.yml` |
-| `scrna-sccoda` | 11_abundance scCODA 丰度分析 | TensorFlow, scCODA | `environment-sccoda.yml`（当前 linux-64 专属） |
+| `scrna-sccoda` | 11_abundance scCODA 丰度分析 | TensorFlow, scCODA | `environment-sccoda.yml`（两平台，2026-06-15 跨平台改造） |
 
-> **跨平台差异**：`environment-sccoda.yml` 当前为 linux-64 专属（pin 了 `__linux` virtual package 及 linux 底层库如 `libgcc-ng`、`ld_impl_linux-64`）。Mac 需手动创建：`conda create -n scrna-sccoda python=3.11 -y && pip install sccoda`。详见 `docs/MAC-SYNC.md`。
+> **跨平台改造（2026-06-15）**：`environment-sccoda.yml` 已剔除 linux 专属底层包，精简为 4 个 conda 功能包（python/pip/r-base/rpy2）+ 76 个 pip 包，与主 `environment.yml` 同风格。两平台均可直接 `conda env create -f environment-sccoda.yml`。
+> **channels 说明（2026-06-17）**：channels 含 `conda-forge` + `bioconda`。两 channel 在 osx-arm64 上 R 包覆盖度不如 linux-64，但 sccoda 环境仅需 `r-base` + `rpy2`（均来自 conda-forge），bioconda 为预留（未来若需 Bioconductor R 包）。当前在两平台可正常求解。
+
+### torch CUDA variant（预期跨平台差异，2026-06-15 登记）
+
+| 项目 | linux-64 (CUDA) | osx-arm64 | linux-64 (CPU only) |
+|------|----------------|-----------|---------------------|
+| torch 来源 | pip `--index-url https://download.pytorch.org/whl/cu126` | pip PyPI | pip PyPI |
+| torch 版本字符串 | `2.12.0+cu126` | `2.12.0` | `2.12.0+cpu` 或 `2.12.0` |
+| env_parity 行为 | 标记为差异（预期，人工确认） | 基准（environment.yml pip PyPI） | 同 osx-arm64 基准 |
+
+> **为什么走 pip 而不走 conda-forge**：conda-forge pytorch 2.12.0 无 cuda126 build（仅 cuda129/cuda130），
+> cuda129 要求 NVIDIA driver >= R570，而项目常用 Ubuntu + A800 集群的 driver 560 仅支持到 CUDA 12.6。
+> pip 提供 `torch==2.12.0+cu126` wheel，与 driver 560 兼容。
+>
+> **安装方式**：`conda env create -f environment.yml`（装 CPU torch），然后在 GPU 机器上运行
+> `bash scripts/setup_cuda.sh` 替换为 CUDA variant。
+
+---
+
+### cytotrace2 独立环境（numpy 版本冲突，2026-06-16 登记）
+
+cytotrace2-py（10d 拟时序）要求 `numpy<2.0.0`，而 scCRAFT（04 嵌入）依赖 jax 要求 `numpy>=2.0`。
+两者无法共存于同一 conda 环境，仿照 scCODA 模式隔离到独立环境。
+
+| 环境 | 用途 | 关键依赖 | 环境 spec |
+|------|------|---------|-----------|
+| `scrna-cytotrace2` | 10d CytoTRACE2 分化潜能 | cytotrace2-py, numpy<2.0, scanpy | `environment-cytotrace2.yml` |
+
+> **安装方式**：`conda env create -f environment-cytotrace2.yml`
+> 使用时需切换 kernel 或在 Jupyter 中选择对应 conda 环境。
+
+### pyscenic numpy 兼容性（monkey-patch，2026-06-16 登记）
+
+pyscenic 0.12.1 的 `transform.py:42-44` 使用 `np.object` 别名（numpy>=1.24 已移除）。
+修复方式：在 `13_grn.ipynb` 的 pyscenic 导入前执行 `np.object = object` monkey-patch，
+不改动 pyscenic 源码（保护两平台兼容性）。不影响原 Mac 环境。
 
 ---
 
