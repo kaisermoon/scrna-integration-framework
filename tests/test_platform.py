@@ -454,6 +454,95 @@ def test_detect_device_prefer_cuda_unavailable_fallback(monkeypatch):
     assert "不可用" in result["reason"]
 
 
+def test_detect_device_prefer_cuda_available(monkeypatch):
+    """prefer='cuda' + cuda 可用 → accelerator=='gpu'."""
+    from scrna_integration.platform import detect_device
+
+    mock_torch = MagicMock()
+    mock_torch.cuda.is_available.return_value = True
+    monkeypatch.setitem(sys.modules, "torch", mock_torch)
+
+    result = detect_device(prefer="cuda")
+    assert result["accelerator"] == "gpu"
+    assert result["device_str"] == "cuda"
+    assert "显式指定 CUDA" in result["reason"]
+
+
+def test_detect_device_prefer_mps_available(monkeypatch):
+    """prefer='mps' + mps 可用 → accelerator=='mps'."""
+    from scrna_integration.platform import detect_device
+
+    mock_torch = MagicMock()
+    mock_torch.cuda.is_available.return_value = False
+    mock_torch.backends.mps.is_available.return_value = True
+    monkeypatch.setitem(sys.modules, "torch", mock_torch)
+
+    result = detect_device(prefer="mps")
+    assert result["accelerator"] == "mps"
+    assert result["device_str"] == "mps"
+    assert "显式指定 MPS" in result["reason"]
+
+
+def test_detect_device_prefer_mps_unavailable_fallback(monkeypatch):
+    """prefer='mps' 但 mps=False → 降级 cpu."""
+    from scrna_integration.platform import detect_device
+
+    mock_torch = MagicMock()
+    mock_torch.cuda.is_available.return_value = False
+    mock_torch.backends.mps.is_available.return_value = False
+    monkeypatch.setitem(sys.modules, "torch", mock_torch)
+
+    result = detect_device(prefer="mps")
+    assert result["accelerator"] == "cpu"
+    assert result["device_str"] == "cpu"
+    assert "不可用" in result["reason"]
+
+
+def test_detect_device_prefer_invalid_treated_as_auto(monkeypatch):
+    """非法 prefer 值 → 按 auto 处理，reason 含注记."""
+    from scrna_integration.platform import detect_device
+
+    mock_torch = MagicMock()
+    mock_torch.cuda.is_available.return_value = False
+    mock_torch.backends.mps.is_available.return_value = False
+    monkeypatch.setitem(sys.modules, "torch", mock_torch)
+
+    result = detect_device(prefer="gpu")
+    assert result["accelerator"] == "cpu"
+    assert result["device_str"] == "cpu"
+    assert "非法" in result["reason"]
+
+
+def test_detect_device_mps_scanvi_fallback_to_cpu(monkeypatch):
+    """cuda=False/mps=True/for_method='scanvi' → accelerator=='cpu'."""
+    from scrna_integration.platform import detect_device
+
+    mock_torch = MagicMock()
+    mock_torch.cuda.is_available.return_value = False
+    mock_torch.backends.mps.is_available.return_value = True
+    monkeypatch.setitem(sys.modules, "torch", mock_torch)
+
+    result = detect_device(prefer="auto", for_method="scanvi")
+    assert result["accelerator"] == "cpu"
+    assert result["device_str"] == "cpu"
+    assert "scANVI" in result["reason"]
+
+
+def test_detect_device_mps_sccraft_fallback_to_cpu(monkeypatch):
+    """cuda=False/mps=True/for_method='sccraft' → accelerator=='cpu'."""
+    from scrna_integration.platform import detect_device
+
+    mock_torch = MagicMock()
+    mock_torch.cuda.is_available.return_value = False
+    mock_torch.backends.mps.is_available.return_value = True
+    monkeypatch.setitem(sys.modules, "torch", mock_torch)
+
+    result = detect_device(prefer="auto", for_method="sccraft")
+    assert result["accelerator"] == "cpu"
+    assert result["device_str"] == "cpu"
+    assert "scCRAFT" in result["reason"]
+
+
 def test_detect_device_return_keys():
     """返回 dict 含 accelerator/devices/device_str/reason 四字段."""
     from scrna_integration.platform import detect_device
