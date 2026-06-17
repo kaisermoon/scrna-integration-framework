@@ -46,6 +46,15 @@ updated: "2026-06-10"
 
 **升级 PI 的点**（不自决）：命中红线 / 改保护字段 / 新付费依赖 / 与 `_plan` 方向冲突 / reviewer block / 涉及数据隐私 / 第一波生物学结果（PI 要亲眼看）。
 
+**`git commit` / `git push` 闸门**（主 Agent 每次 commit/push 前自检，缺一步即停止）：
+1. [ ] coder 改动已完成并自验证（有回报）
+2. [ ] **独立** code-reviewer 已审查（新会话，不复用 coder 上下文），verdict 为 `approve`
+3. [ ] coder 的自我评分**不是**独立审查——`QUALITY SCORES` 不能替代 reviewer verdict
+4. [ ] reviewer 提出的 issue（P0/P1）已全部修复 / 确认假阳性
+5. [ ] 以上 4 条全部满足，才能 `git commit` / `git push`
+
+> 违反纪律案例（2026-06-17）：coder 自评分 0.83 + "PASS" → 主 Agent 跳过独立 reviewer 直接 commit/push。该闸门防止此模式复现。
+
 ## 四、本项目特有铁律
 
 - **notebook PR 防超时**：coder **禁止**在单次 turn 内跑 nbconvert 端到端（scVI 训练 + LLM 调用必超时，2026-06-08 实测两次）。改为：静态构建 notebook（nbformat 增量）+ 清 output（`--clear-output`），**运行验证交 PI 在 jupyter 手动跑或 CI**。
