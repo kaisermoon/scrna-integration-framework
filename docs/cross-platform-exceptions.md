@@ -66,6 +66,7 @@ scCODA（11_abundance 丰度分析）依赖 TF，与主环境隔离到独立 con
 | `scrna-sccoda` | 11_abundance scCODA 丰度分析 | TensorFlow, scCODA | `environment-sccoda.yml`（两平台，2026-06-15 跨平台改造） |
 
 > **跨平台改造（2026-06-15）**：`environment-sccoda.yml` 已剔除 linux 专属底层包，精简为 4 个 conda 功能包（python/pip/r-base/rpy2）+ 76 个 pip 包，与主 `environment.yml` 同风格。两平台均可直接 `conda env create -f environment-sccoda.yml`。
+> **channels 说明（2026-06-17）**：channels 含 `conda-forge` + `bioconda`。两 channel 在 osx-arm64 上 R 包覆盖度不如 linux-64，但 sccoda 环境仅需 `r-base` + `rpy2`（均来自 conda-forge），bioconda 为预留（未来若需 Bioconductor R 包）。当前在两平台可正常求解。
 
 ### torch CUDA variant（预期跨平台差异，2026-06-15 登记）
 
