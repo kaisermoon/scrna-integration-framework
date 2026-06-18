@@ -24,6 +24,7 @@ from scrna_integration.io import (
     _warn_layer2,
     inject_genomic_positions,
     read_with_manifest,
+    summarize_batch_keys,
 )
 
 # ---------------------------------------------------------------------------
@@ -152,6 +153,33 @@ class TestValidateManifest:
     def test_valid_minimal_manifest_passes(self):
         m = _make_manifest_yaml()
         _validate_manifest(m)
+
+    def test_consistency_check_invalid_raises(self):
+        """consistency_check 结构非法时抛出 ValueError。"""
+        # 非列表
+        m = _make_manifest_yaml({"consistency_check": "not_a_list"})
+        with pytest.raises(ValueError, match="consistency_check"):
+            _validate_manifest(m)
+        # 内层非列表
+        m = _make_manifest_yaml({"consistency_check": ["not_a_pair"]})
+        with pytest.raises(ValueError, match="consistency_check"):
+            _validate_manifest(m)
+        # 内层长度不为 2
+        m = _make_manifest_yaml({"consistency_check": [["a", "b", "c"]]})
+        with pytest.raises(ValueError, match="consistency_check"):
+            _validate_manifest(m)
+
+    def test_consistency_check_valid_passes(self):
+        """consistency_check 结构合法时通过。"""
+        m = _make_manifest_yaml(
+            {"consistency_check": [["disease", "sample_id"]]}
+        )
+        _validate_manifest(m)  # should not raise
+
+    def test_no_consistency_check_skips(self):
+        """无 consistency_check 字段时跳过校验。"""
+        m = _make_manifest_yaml()
+        _validate_manifest(m)  # should not raise
 
 
 # ---------------------------------------------------------------------------
@@ -1280,3 +1308,212 @@ class TestCategoricalWarning:
                     x for x in w if "categorical" in str(x.message).lower()
                 ]
                 assert len(cat_warnings) == 0
+
+
+# ---------------------------------------------------------------------------
+# DG-1: sample_id/donor_id 缺失警告
+# ---------------------------------------------------------------------------
+
+
+class TestSampleDonorWarning:
+    """DG-1: sample_id 与 donor_id 都缺失时 warn，有其一则不 warn。"""
+
+    def test_both_missing_warns(self):
+        """sample_id 和 donor_id 都不存在时发出警告。"""
+        adata = _make_synthetic_adata(n_cells=10)
+        # 移除 sample_id
+        del adata.obs["sample_id"]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+            manifest = _make_manifest_yaml({
+                "input": {"format": "h5ad", "path": h5ad_path},
+            })
+            mpath = _write_manifest(manifest, tmpdir)
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                read_with_manifest(mpath)
+                dg1_warnings = [
+                    x for x in w if "未检测到样本/供体标识列" in str(x.message)
+                ]
+                assert len(dg1_warnings) >= 1
+
+    def test_sample_id_present_no_warn(self):
+        """sample_id 存在时不警告。"""
+        adata = _make_synthetic_adata(n_cells=10)
+        # sample_id 已在 fixture 中
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+            manifest = _make_manifest_yaml({
+                "input": {"format": "h5ad", "path": h5ad_path},
+            })
+            mpath = _write_manifest(manifest, tmpdir)
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                read_with_manifest(mpath)
+                dg1_warnings = [
+                    x for x in w if "未检测到样本/供体标识列" in str(x.message)
+                ]
+                assert len(dg1_warnings) == 0
+
+    def test_donor_id_present_no_warn(self):
+        """仅 donor_id 存在（无 sample_id）时不警告。"""
+        adata = _make_synthetic_adata(n_cells=10)
+        del adata.obs["sample_id"]
+        adata.obs["donor_id"] = [f"donor_{i % 3}" for i in range(10)]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+            manifest = _make_manifest_yaml({
+                "input": {"format": "h5ad", "path": h5ad_path},
+            })
+            mpath = _write_manifest(manifest, tmpdir)
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                read_with_manifest(mpath)
+                dg1_warnings = [
+                    x for x in w if "未检测到样本/供体标识列" in str(x.message)
+                ]
+                assert len(dg1_warnings) == 0
+
+
+# ---------------------------------------------------------------------------
+# DG-2: summarize_batch_keys 辅助函数
+# ---------------------------------------------------------------------------
+
+
+class TestSummarizeBatchKeys:
+    """DG-2: summarize_batch_keys 输出关键摘要字段且不崩溃。"""
+
+    def test_output_contains_key_fields(self, capsys):
+        """合成多源 adata 调用输出含关键摘要字段。"""
+        adata = _make_synthetic_adata(n_cells=20)
+        adata.obs["batch"] = ["batch_A"] * 10 + ["batch_B"] * 10
+        # source_dataset 已在 read_with_manifest 中写入，手动设
+        adata.obs["source_dataset"] = ["DS1"] * 10 + ["DS2"] * 10
+        summarize_batch_keys(adata)
+        captured = capsys.readouterr()
+        assert "batch" in captured.out
+        assert "sample_id" in captured.out
+        assert "source_dataset" in captured.out
+        assert "n_unique" in captured.out
+        assert "dtype" in captured.out
+
+    def test_no_crash_on_minimal_adata(self, capsys):
+        """最小 adata（无 batch 列）调用不崩溃。"""
+        adata = _make_synthetic_adata(n_cells=5)
+        # 只保留 sample_id，无 batch / source_dataset
+        summarize_batch_keys(adata)
+        captured = capsys.readouterr()
+        assert "不存在" in captured.out
+
+    def test_mixed_int_string_batch_keys(self, capsys):
+        """整数与字符串 batch 键混存时输出混存提示。"""
+        adata = _make_synthetic_adata(n_cells=12)
+        adata.obs["batch"] = [1, 2, 3] * 4
+        # 需要至少 1 个字符串 + 1 个整数混存
+        # 先转为 str 避免 pandas FutureWarning（int64 列赋字符串）
+        adata.obs["batch"] = adata.obs["batch"].astype(str)
+        adata.obs.loc[adata.obs_names[0], "batch"] = "batch_extra"
+        summarize_batch_keys(adata)
+        captured = capsys.readouterr()
+        assert "整数与字符串混存" in captured.out
+        assert "batch_X" not in captured.out  # 此例无 batch_X
+
+
+# ---------------------------------------------------------------------------
+# DG-3: obs_mapping 跨列一致性校验（consistency_check）
+# ---------------------------------------------------------------------------
+
+
+class TestConsistencyCheck:
+    """DG-3: manifest 提供 consistency_check 时做跨列一致性校验。"""
+
+    def test_conflict_warns(self):
+        """一对多时警告（同一 sample_id 对应多个 disease 值）。"""
+        adata = _make_synthetic_adata(n_cells=10)
+        adata.obs["disease"] = (
+            ["CAG"] * 5 + ["IM"] * 5
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+            manifest = _make_manifest_yaml({
+                "input": {"format": "h5ad", "path": h5ad_path},
+                "obs_mapping": {},
+                "consistency_check": [["disease", "sample_id"]],
+            })
+            mpath = _write_manifest(manifest, tmpdir)
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                read_with_manifest(mpath)
+                cc_warnings = [
+                    x for x in w if "consistency_check" in str(x.message)
+                ]
+                assert len(cc_warnings) >= 1
+                msg = str(cc_warnings[0].message)
+                assert "一对多" in msg
+                assert "disease" in msg
+
+    def test_consistent_no_warn(self):
+        """一致时不警告。"""
+        adata = _make_synthetic_adata(n_cells=10)
+        adata.obs["disease"] = "CAG"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+            manifest = _make_manifest_yaml({
+                "input": {"format": "h5ad", "path": h5ad_path},
+                "obs_mapping": {},
+                "consistency_check": [["disease", "sample_id"]],
+            })
+            mpath = _write_manifest(manifest, tmpdir)
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                read_with_manifest(mpath)
+                cc_warnings = [
+                    x for x in w if "consistency_check" in str(x.message)
+                ]
+                assert len(cc_warnings) == 0
+
+    def test_missing_column_warns_skip(self):
+        """校验列不存在时警告但跳过不崩溃。"""
+        adata = _make_synthetic_adata(n_cells=10)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+            manifest = _make_manifest_yaml({
+                "input": {"format": "h5ad", "path": h5ad_path},
+                "obs_mapping": {},
+                "consistency_check": [["nonexistent_col", "sample_id"]],
+            })
+            mpath = _write_manifest(manifest, tmpdir)
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                result = read_with_manifest(mpath)
+                skip_warnings = [
+                    x for x in w if "不存在" in str(x.message)
+                ]
+                assert len(skip_warnings) >= 1
+            assert isinstance(result, anndata.AnnData)
+
+    def test_no_config_skips_silently(self):
+        """无 consistency_check 配置时静默跳过。"""
+        adata = _make_synthetic_adata(n_cells=10)
+        adata.obs["disease"] = ["CAG"] * 5 + ["IM"] * 5
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+            manifest = _make_manifest_yaml({
+                "input": {"format": "h5ad", "path": h5ad_path},
+                "obs_mapping": {},
+            })
+            mpath = _write_manifest(manifest, tmpdir)
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                read_with_manifest(mpath)
+                cc_warnings = [
+                    x for x in w if "consistency_check" in str(x.message)
+                ]
+                assert len(cc_warnings) == 0
