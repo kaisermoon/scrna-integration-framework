@@ -154,6 +154,33 @@ class TestValidateManifest:
         m = _make_manifest_yaml()
         _validate_manifest(m)
 
+    def test_consistency_check_invalid_raises(self):
+        """consistency_check 结构非法时抛出 ValueError。"""
+        # 非列表
+        m = _make_manifest_yaml({"consistency_check": "not_a_list"})
+        with pytest.raises(ValueError, match="consistency_check"):
+            _validate_manifest(m)
+        # 内层非列表
+        m = _make_manifest_yaml({"consistency_check": ["not_a_pair"]})
+        with pytest.raises(ValueError, match="consistency_check"):
+            _validate_manifest(m)
+        # 内层长度不为 2
+        m = _make_manifest_yaml({"consistency_check": [["a", "b", "c"]]})
+        with pytest.raises(ValueError, match="consistency_check"):
+            _validate_manifest(m)
+
+    def test_consistency_check_valid_passes(self):
+        """consistency_check 结构合法时通过。"""
+        m = _make_manifest_yaml(
+            {"consistency_check": [["disease", "sample_id"]]}
+        )
+        _validate_manifest(m)  # should not raise
+
+    def test_no_consistency_check_skips(self):
+        """无 consistency_check 字段时跳过校验。"""
+        m = _make_manifest_yaml()
+        _validate_manifest(m)  # should not raise
+
 
 # ---------------------------------------------------------------------------
 # Species enforcement (tested through read_with_manifest)
@@ -1384,15 +1411,15 @@ class TestSummarizeBatchKeys:
     def test_mixed_int_string_batch_keys(self, capsys):
         """整数与字符串 batch 键混存时输出混存提示。"""
         adata = _make_synthetic_adata(n_cells=12)
-        adata.obs["batch"] = [1, 2, 3] * 4 + ["batch_X", "batch_Y"] * 0
+        adata.obs["batch"] = [1, 2, 3] * 4
         # 需要至少 1 个字符串 + 1 个整数混存
+        # 先转为 str 避免 pandas FutureWarning（int64 列赋字符串）
+        adata.obs["batch"] = adata.obs["batch"].astype(str)
         adata.obs.loc[adata.obs_names[0], "batch"] = "batch_extra"
         summarize_batch_keys(adata)
         captured = capsys.readouterr()
-        # 应该看到混存提示
-        if "整数与字符串混存" in captured.out:
-            assert "batch_X" not in captured.out  # 此例无 batch_X
-        # 至少函数运行无异常
+        assert "整数与字符串混存" in captured.out
+        assert "batch_X" not in captured.out  # 此例无 batch_X
 
 
 # ---------------------------------------------------------------------------

@@ -1075,3 +1075,21 @@ def _validate_manifest(manifest: dict) -> None:
                 f"qc_overrides.{step}.skip 为 true 但缺少 'reason'。"
                 f"跳过 QC 步骤时必须给出理由。"
             )
+
+    # consistency_check: 可选字段，结构 list[list[str]]，每项恰好 2 个字符串列名
+    cc = manifest.get("consistency_check")
+    if cc is not None:
+        if not isinstance(cc, list):
+            raise ValueError(
+                "consistency_check 格式应为列表，如 [['列A', '列B'], ['列C', '列D']]"
+            )
+        for i, pair in enumerate(cc):
+            if (
+                not isinstance(pair, list)
+                or len(pair) != 2
+                or not all(isinstance(s, str) for s in pair)
+            ):
+                raise ValueError(
+                    f"consistency_check 第 {i+1} 项格式非法："
+                    f"每项应为 [列A, 列B] 两个字符串列名，当前为 {pair!r}"
+                )
