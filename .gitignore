@@ -60,6 +60,7 @@ tests/fixtures/
 !scripts/**
 
 # 分析中间产物
+results/*.csv
 results/data/
 results/figures/
 results/tables/
@@ -75,8 +76,6 @@ figures/
 
 # === 敏感上下文（GitHub 仓库项目强制保留，禁止删除）===
 # vault 规划文件（含 PI 决策/审计），不进 GitHub
-_memory.md
-_plan.md
 planning/
 
 # === 项目级 secrets ===
