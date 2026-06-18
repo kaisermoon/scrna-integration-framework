@@ -3,7 +3,7 @@ title: "项目记忆：scRNA-seq整合分析框架"
 type: project-memory
 project_id: "scrna-integration-framework"
 last_session: "2026-06-17"
-updated: "2026-06-17b"
+updated: "2026-06-18"
 ---
 
 # 项目记忆：scRNA-seq整合分析框架
@@ -15,6 +15,20 @@ updated: "2026-06-17b"
 ## 当前状态
 
 **phase = planning**。2026-06-05 由 `/kickoff` 新建。
+
+## 💾 会话保存点（2026-06-18，obs 对齐压力测试 → ADR-0014 两相设计 → P0 修复 PR #86 合并，main = `b447b6f`）
+
+**状态**：main = `b447b6f`。远程/本地只剩 main（0/0 同步），工作树仅本机 untracked `results/` + 4 个 `scripts/_run_*.py`。本轮合并 PR #86。
+
+**本轮 PI 要求对 `read_with_manifest` 跨数据集 obs 列对齐做专门压力测试（ultracode workflow，17 sonnet agent，12 场景真跑），发现对齐机制当前不能可靠对齐 Core obs schema，6 P0 + 4 P1，问题全在确定性应用层——不报错但数据已被静默改错。报告 `results/stress_test_obs_alignment_2026-06-18.md`（本机产物，未入库）。**
+
+**架构定调（ADR-0014）**：PI 提"对齐是否必须靠 LLM"。厘清后落定两相设计——运行期纯确定性零 LLM、设计期 LLM 提议 + PI 确认 + 冻结 manifest、向 CellxGene 字段标准对齐。本体接地 PI 选 LLM 提议。
+
+**PR #86（已合并）**：修 6 P0 + DG-4 categorical warn。PI 拍板三条行为：Layer1 缺字段 fail loudly（raise ValueError）、NaN 保留真值（不转 "nan" 字符串）、其余推荐项全采纳。流程：coder（主树）→ 独立 reviewer approve（7 条逐条核实、红线全过、150 测试绿、2 Minor 已修）→ operator squash 合并 → 主 Agent 实地核验（MERGED / 远程只剩 main / 修复 + ADR 在 main）。合并前 operator 确认 4 个真实 manifest（kim/nancang/nowicki/yue）Layer1 三字段全齐、写入 obs 无条件，fail loudly 不误伤现有数据流。
+
+**重要纠正**：项目 LLM 调用走自配 `.env` API，不是 OpenRouter（早期记录有误）。
+
+**仍挂起（PI 域）**：① ADR-0014 第二相 LLM 提议器实现（用 `.env` API，本轮地基已就位可启动）② P1 的 DG-1/DG-2/DG-3（sample_id 纳入 Layer1 / 跨源 batch 语义校验 / obs_mapping 跨列一致性）本轮未做，留下一轮 ③ device 自适应层三环境实机验证 ④ 真实注释数据跑生物学结果。
 
 ## 💾 会话保存点（2026-06-17 第二次，跨平台兼容硬目标入库 + 3 Minor 修正闭环，main = `cccbabb`）
 
