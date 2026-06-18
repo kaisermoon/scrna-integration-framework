@@ -17,12 +17,14 @@ repos:
       - id: check-yaml
       - id: check-json
 
-  # 敏感文件拦截：.env / _memory.md / planning/
+  # 敏感文件拦截：.env / planning/ / secrets/
+  # 注：_memory.md/_plan.md 开发阶段已纳入跟踪同步生产机（见 CLAUDE.md 第五节状态文件公开仓纪律），
+  # 写入时按脱敏纪律避免 PII/内网地址/凭证/指责性措辞；gitleaks 仍全仓扫密钥兜底。
   - repo: local
     hooks:
       - id: forbid-sensitive-files
         name: 拒绝提交敏感文件
-        entry: "bash -c 'for f in \"$@\"; do case \"$f\" in _memory.md|planning/*|.env|.env.local|secrets/*) echo \"BLOCKED 拒绝提交敏感文件 $f\"; exit 1;; esac; done' --"
+        entry: "bash -c 'for f in \"$@\"; do case \"$f\" in planning/*|.env|.env.local|secrets/*) echo \"BLOCKED 拒绝提交敏感文件 $f\"; exit 1;; esac; done' --"
         language: system
         pass_filenames: true
 

@@ -53,7 +53,7 @@ updated: "2026-06-10"
 4. [ ] reviewer 提出的 issue（P0/P1）已全部修复 / 确认假阳性
 5. [ ] 以上 4 条全部满足，才能 `git commit` / `git push`
 
-> 违反纪律案例（2026-06-17）：coder 自评分 0.83 + "PASS" → 主 Agent 跳过独立 reviewer 直接 commit/push。该闸门防止此模式复现。
+> 流程缺口示例（2026-06-17）：曾出现 coder 自评分 0.83 + "PASS" 即被当作通过、跳过独立 reviewer 直接 commit/push。该闸门防止此模式复现。
 
 ## 四、本项目特有铁律
 
@@ -71,3 +71,4 @@ updated: "2026-06-10"
 - `_project.md` 元数据 / `_plan.md` PR 计划与状态 / `_memory.md` 项目记忆（含会话保存点，续跑先读它）
 - `SPEC.md` 实现规格 / `CONTEXT.md` 术语表 / `docs/adr/` 架构决策（0001-0009）
 - `.env.example` LLM provider key+url 模板（06 mLLMCelltype 多模型直连）
+- **状态文件公开仓纪律**：本仓为 public，`_memory.md`/`_plan.md` 已纳入 git 跟踪并同步至公开仓。写这两个文件时禁止出现：① 真实绝对路径（用 `~`/项目内相对路径/`<vault根>` 占位）② 内网地址/端口/网关 IP/任何凭证（用 `<本地网关>` 占位，密钥永不入库）③ 对协作方的指责性措辞（违纪/谎报等 → 改写为中性技术教训，教训保留）。
