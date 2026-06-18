@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import os
+from collections import Counter
 import warnings
 from pathlib import Path
 
@@ -99,7 +100,28 @@ def read_with_manifest(manifest_path: str) -> anndata.AnnData:
                     stacklevel=2,
                 )
                 continue
-            adata.obs[target_col] = adata.obs[source_col].astype(str)
+
+            # P0-2: 目标列冲突检查——已有列被覆盖时静默是隐患
+            if target_col in adata.obs.columns:
+                warnings.warn(
+                    f"obs_mapping: 目标列 '{target_col}' 已存在，将被覆盖",
+                    stacklevel=2,
+                )
+
+            # DG-4: categorical 列 .astype(str) 会丢失类别排序信息
+            if isinstance(adata.obs[source_col].dtype, pd.CategoricalDtype):
+                warnings.warn(
+                    f"obs_mapping: 源列 '{source_col}' 是 categorical 类型，"
+                    f"转换为字符串将丢失类别排序信息",
+                    stacklevel=2,
+                )
+
+            # P0-4: NaN 保留为真 NaN（而非字符串 "nan"）
+            source_series = adata.obs[source_col]
+            nan_mask = source_series.isna()
+            adata.obs[target_col] = source_series.astype(str)
+            if nan_mask.any():
+                adata.obs.loc[nan_mask, target_col] = np.nan
 
         for target_col, mapping in value_mapping.items():
             if target_col not in adata.obs.columns:
@@ -108,6 +130,24 @@ def read_with_manifest(manifest_path: str) -> anndata.AnnData:
                     stacklevel=2,
                 )
                 continue
+
+            # P0-3: 检测未被 mapping 覆盖的取值，不静默穿透
+            col_vals = adata.obs[target_col]
+            non_null_vals = col_vals.dropna().astype(str)
+            unique_vals = non_null_vals.unique()
+            uncovered = sorted([v for v in unique_vals if v not in mapping])
+            if uncovered:
+                # 附带频数，让 PI 可见各源词表分歧
+                val_counts = Counter(non_null_vals)
+                uncovered_detail = {
+                    v: val_counts[v] for v in uncovered
+                }
+                warnings.warn(
+                    f"value_mapping: 目标列 '{target_col}' 有 {len(uncovered)} 个取值"
+                    f"未被映射覆盖，将保持原值穿透: {uncovered_detail}",
+                    stacklevel=2,
+                )
+
             adata.obs[target_col] = adata.obs[target_col].map(
                 lambda x, m=mapping: m.get(str(x), x)
             )
@@ -138,6 +178,13 @@ def read_with_manifest(manifest_path: str) -> anndata.AnnData:
             if src in adata.obs.columns:
                 adata.obs[col_name] = adata.obs[src].map(
                     lambda x, r=rules: r.get(str(x), str(x))
+                )
+            else:
+                # P0-6: 源列缺失时明确警告，消除全文件唯一静默跳过路径
+                warnings.warn(
+                    f"project_specific: 源列 '{src}' 在数据中未找到；"
+                    f"无法填充 '{col_name}'",
+                    stacklevel=2,
                 )
         elif isinstance(cfg, dict) and "value" in cfg:
             adata.obs[col_name] = cfg["value"]
@@ -193,15 +240,19 @@ def read_with_manifest(manifest_path: str) -> anndata.AnnData:
         )
     adata.uns["species"] = "human"
 
-    # ===== 9. 疾病系统传播 =====
-    # disease_system 是跨项目细胞分组的一级维度（gastric/synovium/ovary/vaginal...）。
-    # 每行细胞标记所属系统，使跨疾病整合分析能按系统分组。这是 Layer 1 必需字段。
+    # ===== 9. 疾病系统 + 项目 ID 传播 =====
+    # disease_system / project_id 是跨项目细胞分组的 Layer 1 必需字段。
+    # 每行细胞标记所属系统与项目，使跨疾病整合分析能按系统分组。
     adata.obs["disease_system"] = manifest["disease_system"]
+    adata.obs["project_id"] = manifest["project_id"]
 
     # ===== 10. Layer 2 强警告 =====
     # CellxGene 对齐的 7 个字段缺失或异常时发出警告但不阻断读取。
     # LLM best-effort 修复延后到 PR-3c（需要 OpenRouter key）。
     _warn_layer2(adata)
+
+    # P0-1: Layer 1 确定性校验——三个必需字段缺任一即 fail loudly
+    _validate_layer1(adata)
 
     # ===== 11. 记录 raw matrix 路径 =====
     # 为什么只记路径不加载：raw matrix（未过滤的 cellranger 输出）通常是
@@ -416,6 +467,13 @@ def _join_one_clinical_table(adata: anndata.AnnData, cfg: dict) -> None:
         )
         return
 
+    # P0-5: 显式类型对齐——避免 category-vs-int64 静默零匹配 / object-vs-int64 崩溃
+    n_cells_before = adata.n_obs
+    if manifest_field in adata.obs.columns:
+        adata.obs[manifest_field] = adata.obs[manifest_field].astype(str)
+    if table_column in meta_df.columns:
+        meta_df[table_column] = meta_df[table_column].astype(str)
+
     # 左连接：obs（左）← metadata（右）
     original_cols = set(adata.obs.columns)
     meta_cols_to_merge = [table_column] + [
@@ -429,6 +487,15 @@ def _join_one_clinical_table(adata: anndata.AnnData, cfg: dict) -> None:
         right_on=table_column,
     ).set_index("index")
     adata.obs.index.name = None
+
+    # 行数不应因左连接变化（细胞数不变定律）
+    if adata.n_obs != n_cells_before:
+        warnings.warn(
+            f"临床关联后细胞数变化: {n_cells_before} → {adata.n_obs}。"
+            f"键类型不一致（category/int64/object）可能导致静默零匹配，"
+            f"已自动执行 astype(str) 对齐。若仍不一致，请检查 join_on 配置。",
+            stacklevel=2,
+        )
 
 
 # =============================================================================
@@ -773,6 +840,29 @@ def _warn_layer2(adata: anndata.AnnData) -> None:
                     f"LLM 修复延后到 PR-3c。",
                     stacklevel=2,
                 )
+
+
+# =============================================================================
+# Layer 1 确定性校验（P0-1：fail loudly）
+# =============================================================================
+
+_LAYER1_REQUIRED = ["source_dataset", "project_id", "disease_system"]
+
+
+def _validate_layer1(adata: anndata.AnnData) -> None:
+    """校验 Layer 1 三个必需字段是否已写入 adata.obs。
+
+    缺任一即 raise ValueError（fail loudly，PI 已拍板抛错不是 warn）。
+    这是纯确定性校验——零 LLM，只验证 manifest 冻结的映射是否已正确应用。
+    """
+    missing = [f for f in _LAYER1_REQUIRED if f not in adata.obs.columns]
+    if missing:
+        raise ValueError(
+            f"Layer 1 必需字段缺失: {missing}。"
+            f"read_with_manifest 未正确写入这些字段，请检查 manifest 配置"
+            f"（source_dataset/project_id/disease_system）"
+            f"及 obs_mapping 映射是否正确。"
+        )
 
 
 # =============================================================================
