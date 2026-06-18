@@ -3,7 +3,7 @@ title: "项目记忆：scRNA-seq整合分析框架"
 type: project-memory
 project_id: "scrna-integration-framework"
 last_session: "2026-06-17"
-updated: "2026-06-18"
+updated: "2026-06-18b"
 ---
 
 # 项目记忆：scRNA-seq整合分析框架
@@ -15,6 +15,22 @@ updated: "2026-06-18"
 ## 当前状态
 
 **phase = planning**。2026-06-05 由 `/kickoff` 新建。
+
+## 💾 会话保存点（2026-06-18 第二次，obs 对齐两相落地：P1 增强 PR #88 + 第二相 LLM 提议器 PR #89 合并，main = `a400d1e`）
+
+**状态**：main = `a400d1e`。远程/本地只剩 main（0/0），工作树仅本机 untracked `results/` + 4 个 `scripts/_run_*.py`。本轮合并 3 个 PR（#87 记忆 / #88 P1 / #89 第二相）。
+
+**PI 三指令一次推完**：① _memory.md 提交上远程（PR #87）② 启动 ADR-0014 第二相 LLM 提议器 ③ 做 P1 三项。后两者文件零重叠，并行两 coder（worktree）。
+
+**PR #88（P1 增强，io.py）**：DG-1 样本/供体标识缺失轻量 warn（非 fail loudly）+ DG-2 summarize_batch_keys 多源合并排查 helper（独立函数不进主流程）+ DG-3 obs_mapping 跨列一致性可选校验（consistency_check，新增可选 manifest 字段+schema 校验）+ _warn_layer2 措辞修正（OpenRouter→项目 .env API）。纯确定性零 LLM。独立 reviewer approve，2 issue（consistency_check schema 校验+测试强化）修后合并，77 测试绿。
+
+**PR #89（第二相 LLM 提议器，notebooks/）**：新增设计期工具——notebooks/_llm_proposer.py 四确定性纯函数（build_proposal_prompt/parse_proposal/merge_into_manifest/write_manifest）+ 00_propose_obs_manifest.ipynb（PI 手动跑：读 obs/manifest/临床/本体→LLM 提议→PI 逐条确认→写回 manifest）。复用 llm_config.py 走项目 .env。**严守 ADR-0004 不进 src/**（放 notebooks/）。实质审查全绿，size 1401>400 由 PI 批例外（notebook JSON 固有膨胀，沿用 #79/#81 先例），2 minor 修后合并，30 纯函数测试绿（LLM 调用验证交 PI）。
+
+**架构自决报备 PI**：第二相放 notebooks/ 而非 src/（ADR-0004 三函数红线+ADR-0014 定性设计期工具），PI 知悉。
+
+**流程印证**：闸门五步全程走完（两 PR 各独立 reviewer 新会话），后台 coder bash 受限跑不了 pytest 由主 Agent 补跑验证（104 测试绿）。
+
+**仍挂起（PI 域）**：① 第二相提议器实机验证（PI 配 .env 后在 jupyter 跑 00_propose notebook 真调 LLM 验证提议质量）② device 自适应层三环境实机验证 ③ 真实注释数据跑生物学结果 ④ DG-2 跨源 batch 语义校验 helper 待 PI 多源合并时实用验证。
 
 ## 💾 会话保存点（2026-06-18，obs 对齐压力测试 → ADR-0014 两相设计 → P0 修复 PR #86 合并，main = `b447b6f`）
 
