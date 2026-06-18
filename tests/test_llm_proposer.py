@@ -223,7 +223,7 @@ class TestParseProposal:
         assert result["rationale"] == ""
 
     def test_none_text_returns_fallback(self):
-        result = _llm.parse_proposal("")
+        result = _llm.parse_proposal(None)
         assert result == {
             "obs_mapping": {},
             "value_mapping": {},
