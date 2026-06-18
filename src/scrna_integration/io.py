@@ -152,6 +152,45 @@ def read_with_manifest(manifest_path: str) -> anndata.AnnData:
                 lambda x, m=mapping: m.get(str(x), x)
             )
 
+    # DG-3: obs_mapping 跨列一致性校验（纯确定性——零 LLM）
+    # 若 manifest 提供了 consistency_check 配置块（列出应一致的列对，
+    # 如 [["disease", "sample_id"]] 表示同一 sample_id 应只对应一个 disease），
+    # 则对每对做分组校验，发现一对多时 warn 列出冲突取值组合。
+    # 无 consistency_check 配置时静默跳过（不强制，避免误报）。
+    consistency_check = manifest.get("consistency_check")
+    if consistency_check:
+        for pair in consistency_check:
+            col_a, col_b = pair[0], pair[1]
+            if col_a not in adata.obs.columns or col_b not in adata.obs.columns:
+                warnings.warn(
+                    f"consistency_check: 列 '{col_a}' 或 '{col_b}' 不存在；"
+                    f"跳过该校验对",
+                    stacklevel=2,
+                )
+                continue
+            # 对于 col_b 的每个唯一值，检查 col_a 是否只有 1 个唯一非 NaN 值
+            grouped = adata.obs.groupby(col_b)[col_a].apply(
+                lambda x: sorted(x.dropna().unique())
+            )
+            conflicts = {}
+            for b_val, a_vals in grouped.items():
+                if isinstance(b_val, float) and np.isnan(b_val):
+                    continue
+                if len(a_vals) > 1:
+                    conflicts[str(b_val)] = [str(v) for v in a_vals]
+            if conflicts:
+                conflict_items = list(conflicts.items())[:5]
+                conflict_str = "; ".join(
+                    f"{b_val} → {a_vals}"
+                    for b_val, a_vals in conflict_items
+                )
+                suffix = " ..." if len(conflicts) > 5 else ""
+                warnings.warn(
+                    f"consistency_check: '{col_a}' 在 '{col_b}' 内存在一对多映射"
+                    f"（前 {min(5, len(conflicts))} 条）{suffix}: {conflict_str}",
+                    stacklevel=2,
+                )
+
     # ===== 3. 关联临床信息表 =====
     # 外部临床 metadata（xlsx/csv）中的 patient/sample 级字段
     # （如年龄、性别、H. pylori 状态）需要合并到 obs 中。
@@ -248,11 +287,22 @@ def read_with_manifest(manifest_path: str) -> anndata.AnnData:
 
     # ===== 10. Layer 2 强警告 =====
     # CellxGene 对齐的 7 个字段缺失或异常时发出警告但不阻断读取。
-    # LLM best-effort 修复延后到 PR-3c（需要 OpenRouter key）。
+    # LLM best-effort 修复延后到设计期提议器（ADR-0014 第二相，需要项目 .env 配置的 API）。
     _warn_layer2(adata)
 
     # P0-1: Layer 1 确定性校验——三个必需字段缺任一即 fail loudly
     _validate_layer1(adata)
+
+    # DG-1: sample_id/donor_id 缺失警告（纯确定性——零 LLM）
+    # sample_id/donor_id 是关键分组字段但不在 _LAYER2_FIELDS（CellxGene 七字段）
+    # 缺失时只 warn 不阻断（区别于 Layer 1 的 fail loudly——
+    # 这两个不是必需字段，是强烈建议）。
+    if "sample_id" not in adata.obs.columns and "donor_id" not in adata.obs.columns:
+        warnings.warn(
+            "未检测到样本/供体标识列（sample_id/donor_id），"
+            "下游按样本分组分析（pseudobulk/abundance）将受限。",
+            stacklevel=2,
+        )
 
     # ===== 11. 记录 raw matrix 路径 =====
     # 为什么只记路径不加载：raw matrix（未过滤的 cellranger 输出）通常是
@@ -788,6 +838,47 @@ def inject_genomic_positions(
     return adata
 
 
+def summarize_batch_keys(adata: anndata.AnnData) -> None:
+    """打印合并后 AnnData 各 batch 相关列的取值分布摘要。
+
+    供 PI 在多源合并后手动调用，排查 batch 键语义不一致等问题。
+    纯确定性——零 LLM。不改动数据，仅打印诊断信息。
+
+    为什么需要独立函数而不是嵌入 read_with_manifest：batch 语义校验
+    发生在 anndata.concat 之后（stage1 多源合并 notebook 里），不在单源
+    读取内。合并后的 adata 才具备完整的 batch 列对比上下文。
+
+    Parameters
+    ----------
+    adata : AnnData
+        合并后的 AnnData 对象（如 stage1 多源合并后）。
+    """
+    batch_cols = ["batch", "sample_id", "source_dataset"]
+    for col in batch_cols:
+        if col not in adata.obs.columns:
+            print(f"[summarize_batch_keys] 列 '{col}' 不存在")
+            continue
+        series = adata.obs[col]
+        n_unique = series.nunique()
+        has_nan = bool(series.isna().any())
+        dtype_str = str(series.dtype)
+        print(
+            f"[summarize_batch_keys] {col}: dtype={dtype_str}, "
+            f"n_unique={n_unique}, has_NaN={has_nan}"
+        )
+        # 整数批次号与长字符串 ID 混存提示
+        if n_unique > 1:
+            sample_vals = series.dropna().unique()[:10]
+            str_vals = [v for v in sample_vals if not str(v).isdigit()]
+            int_vals = [v for v in sample_vals if str(v).isdigit()]
+            if str_vals and int_vals:
+                print(
+                    f"  ⚠ 整数与字符串混存："
+                    f"整数示例={[str(v) for v in int_vals[:3]]}, "
+                    f"字符串示例={[str(v) for v in str_vals[:3]]}"
+                )
+
+
 # =============================================================================
 # Layer 2 警告（保留，规则逻辑不琐碎）
 # =============================================================================
@@ -806,15 +897,15 @@ _LAYER2_FIELDS = [
 def _warn_layer2(adata: anndata.AnnData) -> None:
     """对缺失/异常的 Layer 2 CellxGene 对齐字段发出强警告。
 
-    LLM best-effort 修复延后到 PR-3c（需要 OpenRouter key）。
+    LLM best-effort 修复延后到设计期提议器（ADR-0014 第二相，需要项目 .env 配置的 API）。
     本函数仅警告并留 NaN——绝不阻断读取。
     """
     for field in _LAYER2_FIELDS:
         if field not in adata.obs.columns:
             warnings.warn(
                 f"[Layer2] obs 列 '{field}' 缺失。"
-                f"LLM best-effort 修复延后到 PR-3c。"
-                f"所有细胞将写入 NaN。",
+                f"LLM best-effort 修复延后到设计期提议器（ADR-0014 第二相，"
+                f"需要项目 .env 配置的 API）。所有细胞将写入 NaN。",
                 stacklevel=2,
             )
             adata.obs[field] = np.nan
@@ -826,7 +917,8 @@ def _warn_layer2(adata: anndata.AnnData) -> None:
             if n_problem > 0:
                 warnings.warn(
                     f"[Layer2] obs 列 '{field}' 有 {n_problem}/{len(col)} 个"
-                    f"缺失或空值。LLM best-effort 修复延后到 PR-3c。",
+                    f"缺失或空值。LLM best-effort 修复延后到设计期提议器"
+                    f"（ADR-0014 第二相，需要项目 .env 配置的 API）。",
                     stacklevel=2,
                 )
             # 检查"unknown""NA"等可疑值
@@ -837,7 +929,7 @@ def _warn_layer2(adata: anndata.AnnData) -> None:
                 warnings.warn(
                     f"[Layer2] obs 列 '{field}' 有 {suspicious.sum()} 个细胞的值"
                     f"是可疑占位符（'unknown'/'NA' 等）。"
-                    f"LLM 修复延后到 PR-3c。",
+                    f"LLM 修复延后到设计期提议器（ADR-0014 第二相，需要项目 .env 配置的 API）。",
                     stacklevel=2,
                 )
 
@@ -983,3 +1075,21 @@ def _validate_manifest(manifest: dict) -> None:
                 f"qc_overrides.{step}.skip 为 true 但缺少 'reason'。"
                 f"跳过 QC 步骤时必须给出理由。"
             )
+
+    # consistency_check: 可选字段，结构 list[list[str]]，每项恰好 2 个字符串列名
+    cc = manifest.get("consistency_check")
+    if cc is not None:
+        if not isinstance(cc, list):
+            raise ValueError(
+                "consistency_check 格式应为列表，如 [['列A', '列B'], ['列C', '列D']]"
+            )
+        for i, pair in enumerate(cc):
+            if (
+                not isinstance(pair, list)
+                or len(pair) != 2
+                or not all(isinstance(s, str) for s in pair)
+            ):
+                raise ValueError(
+                    f"consistency_check 第 {i+1} 项格式非法："
+                    f"每项应为 [列A, 列B] 两个字符串列名，当前为 {pair!r}"
+                )
