@@ -296,15 +296,6 @@ class TestEmbedPriorityChain:
 class TestAnnotationConcordanceBug:
     """确认 bug：label_b 自动检测未排除 label_a，可致同列自洽 kappa=1.0。"""
 
-    @pytest.mark.xfail(
-        reason=(
-            "BUG: label_b 自动检测未排除 label_a 已用列名（scorers.py:215-218）。"
-            "当 candidates[1] 恰好等于 label_a 时，两张标签列为同一列，"
-            "cohen_kappa 恒为 1.0——自身一致性伪装成跨标注列一致性，结果虚高。"
-            "修复方向：candidates = [c for c in candidates if c != label_a]"
-        ),
-        strict=True,
-    )
     def test_label_a_label_b_same_column_self_concordance(self):
         """label_a=label_b 同列时不应返回 kappa=1.0。"""
         adata = _make_adata(200)

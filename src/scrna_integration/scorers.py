@@ -212,12 +212,17 @@ def annotation_concordance(
             for c in adata.obs.columns
             if any(p in c.lower() for p in ("cell_type", "label", "annotation", "leiden"))
         ]
+        # 排除对方已指定的列，防止 label_a/label_b 命中同一列（同列自洽 kappa=1.0）
+        if label_a is not None:
+            candidates = [c for c in candidates if c != label_a]
+        elif label_b is not None:
+            candidates = [c for c in candidates if c != label_b]
         if len(candidates) >= 2 and label_a is None:
             label_a = candidates[0]
         if len(candidates) >= 2 and label_b is None:
             label_b = candidates[1]
 
-    if label_a is None or label_b is None or label_a not in adata.obs.columns or label_b not in adata.obs.columns:
+    if label_a is None or label_b is None or label_a == label_b or label_a not in adata.obs.columns or label_b not in adata.obs.columns:
         return {"_note": float("nan")}
 
     a = adata.obs[label_a].astype(str)

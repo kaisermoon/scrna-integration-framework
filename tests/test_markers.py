@@ -101,15 +101,6 @@ class TestLoadMarkersEmptyTemplate:
 class TestLoadMarkersRolesBug:
     """确认 bug：roles 传纯字符串时缺乏类型守卫。"""
 
-    @pytest.mark.xfail(
-        reason=(
-            "BUG: load_markers roles=str 时缺少类型守卫（markers.py:82）。"
-            "pandas<2.0：isin(str) 按字符迭代静默返回 {}；"
-            "pandas>=2.0：抛 TypeError 但报英文内部信息。"
-            "修复方向：if isinstance(roles, str): raise TypeError('roles 必须为 list，不能传字符串')"
-        ),
-        strict=True,
-    )
     def test_roles_str_raises_typeerror(self, markers_csv):
         """roles='canonical' 纯字符串应触发中文 TypeError，非依赖 pandas 内部报错。"""
         # 期望：产品代码加守卫后抛出中文 TypeError
