@@ -1160,18 +1160,25 @@ class TestClinicalKeyTypeAlignment:
         assert result.obs["batch"].notna().all()
 
     def test_row_count_warns_on_change(self):
-        """merge 后行数变化时 warn。"""
+        """临床表 join 键有重复值时，AnnData shape 校验抛 ValueError 防止行膨胀。
+
+        _join_one_clinical_table 在 adata.n_obs 变化时有 warn 逻辑（行 542-548），
+        但该代码是死代码——anndata 的 obs setter（_gen_dataframe_df）在 obs 行数与 X
+        矩阵行数不一致时直接 raise ValueError，永远不会执行到 warn。
+        本测试验证这个硬校验确实生效：即临床 join 导致行数变化时被 anndata 拦截，
+        而非静默通过。"""
         adata = _make_synthetic_adata(n_cells=8)
+        # 覆盖 sample_id 使每个细胞唯一：sample_0...sample_7
         adata.obs["sample_id"] = [f"sample_{i}" for i in range(8)]
         with tempfile.TemporaryDirectory() as tmpdir:
             h5ad_path = os.path.join(tmpdir, "test.h5ad")
             adata.write_h5ad(h5ad_path)
 
-            # 制造键不匹配：CSV 的键与 obs 完全不同
+            # 临床 CSV：sample_0 出现两次（键重复 → 左连接行膨胀 8→9）
             csv_path = os.path.join(tmpdir, "clinical.csv")
             pd.DataFrame({
-                "sid": ["nonexistent_1", "nonexistent_2"],
-                "batch": ["X", "Y"],
+                "sid": ["sample_0", "sample_0", "sample_1"],
+                "batch": ["X", "Y", "Z"],
             }).to_csv(csv_path, index=False)
 
             manifest = _make_manifest_yaml({
@@ -1185,12 +1192,10 @@ class TestClinicalKeyTypeAlignment:
                 }],
             })
             mpath = _write_manifest(manifest, tmpdir)
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                result = read_with_manifest(mpath)
-                # 正常情况行数不变（左连接），但键完全不匹配会导致
-                # 键完全不匹配时右表所有列为 NaN，但左表行数不变。此时主要验证不崩溃。
-                assert result.n_obs == 8
+
+            # AnnData shape 硬校验拦截行膨胀，抛出 ValueError
+            with pytest.raises(ValueError, match="shape.*inconsistent.*obs"):
+                read_with_manifest(mpath)
 
 
 # ---------------------------------------------------------------------------

@@ -132,6 +132,7 @@ class TestLoadGroupConfig:
         assert cfg["models"]["sonnet"] == "claude-sonnet-4-6"
         assert cfg["models"]["opus"] == "claude-opus-4-8"
         assert cfg["is_configured"] is True
+        assert cfg["has_api_key"] is False  # empty key in _MINIMAL_ENV
 
     def test_explicit_group_number(self, tmp_path):
         root = self._make_env(tmp_path)
@@ -165,6 +166,7 @@ class TestLoadGroupConfig:
         root = self._make_env(tmp_path)
         cfg = load_llm_group_config(project_root=root)
         assert cfg["api_key"] == ""  # empty key for local gateway
+        assert cfg["has_api_key"] is False  # empty key = not usable for requests
 
     def test_api_key_with_value(self, tmp_path):
         env = tmp_path / ".env"
@@ -176,6 +178,30 @@ class TestLoadGroupConfig:
         )
         cfg = load_llm_group_config(project_root=str(tmp_path))
         assert cfg["api_key"] == "sk-test123"
+        assert cfg["has_api_key"] is True
+
+    def test_empty_key_detectable_while_group_still_active(self, tmp_path):
+        """Bugfix regression: api_key 为空时 group 仍出现在 get_active_groups，
+        但 has_api_key=False 让调用方能区分"配置框架在但 key 没填"。
+        """
+        env = tmp_path / ".env"
+        env.write_text(
+            "LLM_DEFAULT_GROUP=1\n"
+            "LLM_GROUP1_PROVIDER=anthropic\n"
+            "LLM_GROUP1_BASE_URL=http://127.0.0.1:8082\n"
+            "LLM_GROUP1_API_KEY=\n"  # 空 key —— 缺陷 1 的触发条件
+            "LLM_GROUP1_MODEL_HAIKU=claude-haiku-4-5\n"
+        )
+        # group 仍在 active list 中（provider+base_url 已填）
+        active = get_active_groups(project_root=str(tmp_path))
+        assert active == [1]
+
+        # 但 has_api_key=False 明确标记 key 缺失
+        cfg = load_llm_group_config(group=1, project_root=str(tmp_path))
+        assert cfg is not None
+        assert cfg["is_configured"] is True
+        assert cfg["has_api_key"] is False
+        assert cfg["api_key"] == ""
 
     def test_non_numeric_default_group_fallback(self, tmp_path):
         """Non-numeric LLM_DEFAULT_GROUP falls back to group 1 gracefully."""
