@@ -3,7 +3,7 @@ title: "项目记忆：scRNA-seq整合分析框架"
 type: project-memory
 project_id: "scrna-integration-framework"
 last_session: "2026-06-17"
-updated: "2026-06-19b"
+updated: "2026-06-19c"
 ---
 
 # 项目记忆：scRNA-seq整合分析框架
@@ -15,6 +15,26 @@ updated: "2026-06-19b"
 ## 当前状态
 
 **phase = planning**。2026-06-05 由 `/kickoff` 新建。
+
+## 💾 会话保存点（2026-06-19 第三次，完整管线打通 + 全面修复落地，main = `1f9f342`）
+
+**状态**：main = `1f9f342`。远程只剩 main。本轮合并 PR #95（06 timeout+线程）、#96（25notebook 限流+3bug 修复+cov）、#97（3 downstream 修复）。
+
+**里程碑：完整 23-stage 管线首次 100% 打通**。A800 服务器 35 分钟全 PASS，0 失败。per-dataset（4）→ core（5）→ downstream（14），scVI CUDA + LLM 真实调用 + R 守卫跳过，全链路无误。
+
+**PI 指令"进一步测试修正确保流程跑通"**：三波推进——① 06 验证（verdict 通 / mLLMCelltype 代理阻断）② 全球修复（25notebook OpenBLAS 线程限流 + 3 xfail bug 修复 + pytest-cov 引入 89.38% + importorskip 消除）③ 完整 23-stage 真跑暴露 3 个 PARTIAL → 修完重跑 100% 绿。
+
+**本轮共合并 7 个 PR**：#91（e2e+bootstrap+LLM 守卫）、#93（max_tokens+mLLMCelltype 签名+补测）、#95（timeout+线程）、#96（25notebook 限流+3bug+cov）、#97（3 downstream 修复）+ 记忆 PR #90/#92/#94。
+
+**关键修复汇总**：
+- 全 26 notebook bootstrap 向上查找（PR #91）
+- 全 26 notebook OpenBLAS 线程限流（PR #95 + #96），解决 A800 64 核线程爆炸
+- LLM 链路：max_tokens 800 → 16384 + mLLMCelltype 签名修正 + timeout 60 → 120 + 空 key 优雅守卫
+- 3 xfail bug → passed：scorers kappa 同列自洽 / markers roles str 守卫 / _llm_proposer type guard
+- P1 覆盖缺口补测 22 tests（PR #93），覆盖率 89.38%
+- 3 downstream 修复：11 OUTPUT_DIR / 10e Categorical fillna / 16 pseudotime 候选列
+
+**仍挂起**：① mLLMCelltype 被代理阻断（库内部 HTTP 走不通，但 verdict 三色判决已可用）② device 三环境实机验证（Mac / CentOS）③ 真实注释数据生物学结果（PI 审阅 06 产出）④ io.py 死代码清理⑤ run_pipeline_test.py 是否晋升 CI。
 
 ## 💾 会话保存点（2026-06-19 第二次，LLM 链路修复+覆盖补测：mLLMCelltype 签名修正+max_tokens+P1 缺口+3真bug 标红，PR #93 合并，main = `80dbde7`）
 
