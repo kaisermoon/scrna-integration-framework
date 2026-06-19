@@ -113,7 +113,10 @@ def load_llm_group_config(
                            "sonnet": "claude-sonnet-4-6",
                            "opus": "claude-opus-4-8"},
                 "is_configured": True,
+                "has_api_key": False,
             }
+
+        has_api_key 仅表示配置中有非空 key 字符串，不保证 key 能通过远端认证。
 
         若 group 未配置（provider/base_url 为空）则返回 None。
     """
@@ -151,6 +154,7 @@ def load_llm_group_config(
     }
 
     is_configured = bool(provider and base_url)
+    has_api_key = bool(api_key)
 
     if not is_configured:
         return None
@@ -163,6 +167,7 @@ def load_llm_group_config(
         "api_key": api_key,
         "models": models,
         "is_configured": True,
+        "has_api_key": has_api_key,
     }
 
 
