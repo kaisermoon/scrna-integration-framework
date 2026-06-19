@@ -3,7 +3,7 @@ title: "项目记忆：scRNA-seq整合分析框架"
 type: project-memory
 project_id: "scrna-integration-framework"
 last_session: "2026-06-17"
-updated: "2026-06-19"
+updated: "2026-06-19b"
 ---
 
 # 项目记忆：scRNA-seq整合分析框架
@@ -15,6 +15,26 @@ updated: "2026-06-19"
 ## 当前状态
 
 **phase = planning**。2026-06-05 由 `/kickoff` 新建。
+
+## 💾 会话保存点（2026-06-19 第二次，LLM 链路修复+覆盖补测：mLLMCelltype 签名修正+max_tokens+P1 缺口+3真bug 标红，PR #93 合并，main = `80dbde7`）
+
+**状态**：main = `80dbde7`。远程/本地只剩 main。本轮合并 PR #93。
+
+**PI 指令"继续完成任务"**：两条线同步推进——A 线验证 LLM 链路，B 线补 P1 覆盖缺口。A 线确认：LLM 连通性通（代理路由 deepseek-v4-pro 思考模型）；第二相提议器首次真实 LLM 实测成功（Nowicki 10 项映射+MONDO）。B 线补 22 个 P1 缺口测试 + 3 xfail。
+
+**A 线挖掘出的隐藏 bug（并入 PR #93）**：
+1. max_tokens=800 对思考模型严重不足→截断 JSONDecodeError。提到 PARAMS 可调（LLM_MAX_TOKENS=16384）
+2. mLLMCelltype 调用签名根本错（marker_genes+species+tissue 替 adata+cluster_key+tissue_type），key 空时跳过未暴露
+3. **仍待 PI**：.env 的 LLM_GROUP1_API_KEY 需填真实 key（当前仍是占位符"-"），填好后可重跑 06 验证完整 LLM 注释链路
+
+**B 线补测（并入 PR #93）**：6 模块新增 22 测试（io clinical join 5分支/_warn_layer2/scorers 嵌入优先级/platform env_check/markers/llm_config/_llm_proposer）。3 个 xfail 标记真 bug：
+1. scorers kappa 同列自洽恒 1.0（label_b 不排除 label_a，伪装一致性）
+2. markers roles=str 无守卫（pandas≥2.0 英文 TypeError，缺中文友好守卫）
+3. _llm_proposer type guard（value_mapping 非 dict 崩溃）
+
+**闭环**：coder（worktree）×2 + mLLMCelltype诊断 operator → 独立 reviewer approve（213P/1S/3X，size 例外）→ operator squash 合并 → 主 Agent 实地核验。
+
+**仍挂起**：① PI 填 .env key→重跑 06 ② 3 xfail 标记的 bug 是否修③ io.py 死代码清理④ device 三环境实机验证⑤ 真实注释数据生物学结果。
 
 ## 💾 会话保存点（2026-06-19，全套测试审计：单元 194 绿 + 完整 e2e 真跑暴露并修复 e2e 阻塞+LLM 空 key 静默失败，PR #91 合并，main = `6126292`）
 
