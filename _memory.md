@@ -3,7 +3,7 @@ title: "项目记忆：scRNA-seq整合分析框架"
 type: project-memory
 project_id: "scrna-integration-framework"
 last_session: "2026-06-17"
-updated: "2026-06-18b"
+updated: "2026-06-19"
 ---
 
 # 项目记忆：scRNA-seq整合分析框架
@@ -15,6 +15,30 @@ updated: "2026-06-18b"
 ## 当前状态
 
 **phase = planning**。2026-06-05 由 `/kickoff` 新建。
+
+## 💾 会话保存点（2026-06-19，全套测试审计：单元 194 绿 + 完整 e2e 真跑暴露并修复 e2e 阻塞+LLM 空 key 静默失败，PR #91 合并，main = `6126292`）
+
+**状态**：main = `6126292`。远程/本地只剩 main（0/0），工作树仅本机 untracked `results/` + 4 个 `scripts/_run_*.py` + `scripts/run_pipeline_test.py`。本轮合并 PR #91。
+
+**PI 指令"充分、全部测试"**：ultracode 编排。三层测试：① 全套单元 ② 静态覆盖缺口 ③ 完整 e2e 管线真跑。
+
+**单元测试**：194 passed / 1 skip（已知 `test_reads_10x_h5` 缺夹具），全绿。无 coverage 工具（pytest-cov/coverage 均未装），覆盖用静态分析。
+
+**完整 e2e 管线首次真跑通**：`run_pipeline_test.py` 跑 12 stage（stage1→06 + 5 downstream），全 PASS，25 分钟，scVI 真用 CUDA GPU（04 用 85s）。这是项目第一次完整 e2e 真跑通。
+
+**测试暴露 3 类真 bug，本轮全修（PR #91，29 文件）**：
+
+1. **e2e 管线无法执行（P0 回归）**：notebook sys.path bootstrap 只上跳一级，18 个 2 级深 notebook（`01_per_dataset/*` + `07_downstream/*`）nbconvert 时找不到 src→ModuleNotFoundError→级联全挂。notebook 从扁平重组进子目录后的回归，之前没人再跑完整 e2e 所以没暴露。26 notebook 统一改向上逐级查找项目根。
+2. **LLM 空 key 静默失败（P1）**：`.env` 的 `LLM_GROUP1_API_KEY` 为空，旧 `is_configured` 只看 provider+base_url 把空 key 判为已配置→发空 key 请求→06 注释 23 簇全报 JSONDecodeError，且报错消息误导（报"缺 haiku 模型"实为 key 空）。修：`llm_config` 加 `has_api_key` 字段使空 key 可检测；06 空 key 优雅跳过+消息区分。
+3. **假绿测试（P1）**：`test_row_count_warns_on_change` 捕获 warning 却从不断言，改为真断言 AnnData 行膨胀 ValueError。
+
+**harness 自身 bug（本机临时脚本，未入库）**：`run_pipeline_test.py` 用 `python -m jupyter` 走 PATH 解析到系统 Python（缺包）致全 NO_OUTPUT，改绝对路径 jupyter 后修复。
+
+**闭环**：coder（worktree）×2 + 独立 reviewer approve（4 项逐项核实，194 绿，确认 notebook output 无 .env key 泄露，size 例外）→ operator squash 合并 → 主 Agent 实地核验。
+
+**死代码发现（P2，未动）**：`io.py:542-548` clinical join 行膨胀 warn 是死代码（AnnData obs setter 先 raise，warn 到不了）。PR #86 P0-5 的"行数不变校验"实际被 AnnData 硬校验抢先。留后续清理。
+
+**仍挂起（PI 域）**：① **PI 填 `.env` 的 `LLM_GROUP1_API_KEY`**（本地代理 `127.0.0.1:8082` 要认证）→ 恢复 06 LLM 注释 + 第二相提议器实测 ② 21 个 P1 覆盖缺口（scorers 嵌入回退链/io clinical join 分支/markers roles 误传等，报告 `results/full_test_audit_2026-06-18.md`）未补 ③ 是否引入 pytest-cov 设 CI 覆盖门禁 ④ `io.py` 死代码清理 ⑤ device 三环境实机验证 ⑥ 真实注释数据跑生物学结果。
 
 ## 💾 会话保存点（2026-06-18 第二次，obs 对齐两相落地：P1 增强 PR #88 + 第二相 LLM 提议器 PR #89 合并，main = `a400d1e`）
 
