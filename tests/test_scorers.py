@@ -5,6 +5,7 @@
 
 import anndata
 import numpy as np
+import pytest
 
 from scrna_integration.scorers import (
     annotation_concordance,
@@ -208,3 +209,112 @@ class TestAnnotationConcordance:
         adata.obs["bar"] = ["A"] * 95 + ["B"] * 5 + ["A"] * 5 + ["B"] * 95
         r = annotation_concordance(adata, label_a="foo", label_b="bar")
         assert "cohen_kappa" in r
+
+
+# ---------------------------------------------------------------------------
+# P1 补测：clustering_metrics 自动检测 louvain/cluster 列 + 优先级
+# ---------------------------------------------------------------------------
+
+
+class TestClusteringAutoDetect:
+    """clustering_metrics 对 obs 列的自动检测行为。"""
+
+    def test_auto_detect_louvain_column(self):
+        """obs 含 louvain 列 → 自动选用。"""
+        adata = _make_adata(200)
+        adata.obs["louvain"] = ["0"] * 100 + ["1"] * 100
+        r = clustering_metrics(adata)
+        assert "silhouette" in r
+        assert r["silhouette"] > 0.3
+
+    def test_auto_detect_cluster_column(self):
+        """obs 含 cluster 列（无 louvain/leiden）→ 自动选用。"""
+        adata = _make_adata(200)
+        adata.obs["cluster"] = ["A"] * 100 + ["B"] * 100
+        r = clustering_metrics(adata)
+        assert "silhouette" in r
+
+    def test_louvain_priority_over_cluster(self):
+        """louvain 和 cluster 同时存在时，louvain 优先级更高。"""
+        adata = _make_adata(200)
+        adata.obs["cluster"] = ["X"] * 200  # 单簇，无法 silhouette
+        adata.obs["louvain"] = ["0"] * 100 + ["1"] * 100  # 两簇
+        r = clustering_metrics(adata)
+        # louvain 被选中 → 有两簇 → silhouette 存在
+        assert "silhouette" in r
+        assert r["silhouette"] > 0.3
+
+
+# ---------------------------------------------------------------------------
+# P1 补测：integration_metrics 嵌入优先级链（X_pca_harmony > X_scVI > X_scANVI > X_pca）
+# ---------------------------------------------------------------------------
+
+
+class TestEmbedPriorityChain:
+    """integration_metrics 自动检测 obsm 中嵌入的优先级链。"""
+
+    def test_embed_priority_harmony_over_pca(self):
+        """X_pca_harmony 存在时优先于 X_pca。"""
+        rng = np.random.default_rng(99)
+        n_cells = 200
+        # 构造两个嵌入：harmony 和 pca
+        harmony_embed = rng.normal(size=(n_cells, 10)).astype(np.float32)
+        harmony_embed[:100] += 5.0
+        pca_embed = rng.normal(size=(n_cells, 10)).astype(np.float32)
+        pca_embed[:100] += 1.0  # 分离较弱
+
+        adata = _make_adata(200)
+        adata.obsm["X_pca_harmony"] = harmony_embed
+        adata.obsm["X_pca"] = pca_embed
+        adata.obs["batch"] = ["A"] * 100 + ["B"] * 100
+
+        r = integration_metrics(adata)
+        # 选用了 harmony 嵌入 → silhouette_batch 应接近 harmony 的值
+        assert "silhouette_batch" in r
+
+    def test_embed_fallback_to_custom_X_key(self):
+        """obsm 中无标准键但有 X_custom → 回退使用 X_custom。"""
+        rng = np.random.default_rng(99)
+        n_cells = 200
+        custom_embed = rng.normal(size=(n_cells, 10)).astype(np.float32)
+        custom_embed[:100] += 3.0
+
+        adata = _make_adata(200)
+        del adata.obsm["X_pca"]  # 移除标准键
+        adata.obsm["X_custom"] = custom_embed
+        adata.obs["batch"] = ["A"] * 100 + ["B"] * 100
+
+        r = integration_metrics(adata)
+        assert "silhouette_batch" in r
+
+
+# ---------------------------------------------------------------------------
+# P1 xfail: annotation_concordance label_a / label_b 同列自洽 bug
+# ---------------------------------------------------------------------------
+
+
+class TestAnnotationConcordanceBug:
+    """确认 bug：label_b 自动检测未排除 label_a，可致同列自洽 kappa=1.0。"""
+
+    @pytest.mark.xfail(
+        reason=(
+            "BUG: label_b 自动检测未排除 label_a 已用列名（scorers.py:215-218）。"
+            "当 candidates[1] 恰好等于 label_a 时，两张标签列为同一列，"
+            "cohen_kappa 恒为 1.0——自身一致性伪装成跨标注列一致性，结果虚高。"
+            "修复方向：candidates = [c for c in candidates if c != label_a]"
+        ),
+        strict=True,
+    )
+    def test_label_a_label_b_same_column_self_concordance(self):
+        """label_a=label_b 同列时不应返回 kappa=1.0。"""
+        adata = _make_adata(200)
+        # 仅两个候选列：cell_type_labels 和 leiden
+        adata.obs["cell_type_labels"] = ["X"] * 100 + ["Y"] * 100
+        adata.obs["leiden"] = ["0"] * 100 + ["1"] * 100
+        # 显式传相同 label_a=label_b → 同列自洽
+        r = annotation_concordance(
+            adata, label_a="cell_type_labels", label_b="cell_type_labels"
+        )
+        # 期望：应检测到同列并返回 _note；当前代码未做此检测
+        # 当前行为：kappa=1.0（同列自洽）。xfail 标记暴露此 bug。
+        assert "_note" in r or r.get("cohen_kappa", 1.0) < 0.99

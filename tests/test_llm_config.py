@@ -11,6 +11,8 @@ from scrna_integration.llm_config import (
     get_active_groups,
 )
 
+import pytest
+
 
 # ---------------------------------------------------------------------------
 # _parse_dotenv
@@ -216,6 +218,15 @@ class TestLoadGroupConfig:
         assert cfg["group"] == 1  # fallback to group 1
         assert cfg["provider"] == "anthropic"
 
+    def test_project_root_none_uses_cwd(self, monkeypatch, tmp_path):
+        """project_root=None 时从 os.getcwd() 向上查找 vault 根。
+
+        tmp_path 下无 .env → 应抛出 FileNotFoundError（证明走了 cwd 路径）。
+        """
+        monkeypatch.setattr("os.getcwd", lambda: str(tmp_path))
+        with pytest.raises(FileNotFoundError):
+            load_llm_group_config(project_root=None)
+
 
 class TestGetActiveGroups:
     def test_single_active_group(self, tmp_path):
@@ -243,3 +254,9 @@ class TestGetActiveGroups:
                        "LLM_GROUP1_BASE_URL=\n")
         active = get_active_groups(project_root=str(tmp_path))
         assert active == []
+
+    def test_project_root_none_uses_cwd(self, monkeypatch, tmp_path):
+        """project_root=None 时从 os.getcwd() 向上查找 → 找不到 .env 则抛错。"""
+        monkeypatch.setattr("os.getcwd", lambda: str(tmp_path))
+        with pytest.raises(FileNotFoundError):
+            get_active_groups(project_root=None)
