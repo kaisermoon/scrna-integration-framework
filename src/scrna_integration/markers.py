@@ -64,6 +64,14 @@ def load_markers(
             f"请检查 CSV 列名是否与模板一致（区分大小写）。"
         )
 
+    # 类型守卫：roles 传纯字符串时 pandas≥2.0 抛英文 TypeError，<2.0 静默返回 {}
+    # 前置校验给出中文报错，非计算机专业学生友好
+    if isinstance(roles, str):
+        raise TypeError(
+            "roles 参数必须为 list 或 tuple，不能传字符串。"
+            "若只想查一种 role，请写成 ('canonical',) 注意末尾逗号。"
+        )
+
     if roles is None:
         # 完整三层模式：{cell_type: {canonical: [...], optional: [...], negative: [...]}}
         result: dict[str, dict[str, list[str]]] = {}

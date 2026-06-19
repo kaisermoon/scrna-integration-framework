@@ -17,6 +17,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+import warnings
 from typing import Any
 
 import yaml
@@ -312,6 +313,14 @@ def merge_into_manifest(
             if not isinstance(val_dict, dict):
                 continue
             if norm_name not in existing_val:
+                existing_val[norm_name] = {}
+            # 守卫：手动编辑 YAML 时可能把 value_mapping 某 key 误写为
+            # plain string 而非 dict，此时覆盖为空 dict 并警告
+            if not isinstance(existing_val[norm_name], dict):
+                warnings.warn(
+                    f"merge_into_manifest: value_mapping['{norm_name}'] "
+                    f"应为 dict 但收到 {type(existing_val[norm_name]).__name__}，已覆盖为空 dict"
+                )
                 existing_val[norm_name] = {}
             # 合并：只新增不存在的取值
             for src_val, norm_val in val_dict.items():

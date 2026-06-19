@@ -12,6 +12,7 @@ import anndata
 import numpy as np
 import pandas as pd
 import pytest
+import scipy.io as scipy_io
 import scipy.sparse as sp
 import yaml
 
@@ -555,7 +556,6 @@ class TestRead10xMtx:
             import gzip
             import io as sys_io
 
-            scipy_io = pytest.importorskip("scipy.io")
             buf = sys_io.BytesIO()
             scipy_io.mmwrite(buf, adata.X.T)  # 10x 惯例: genes × cells
             with gzip.open(os.path.join(mtx_dir, "matrix.mtx.gz"), "wb") as f:
