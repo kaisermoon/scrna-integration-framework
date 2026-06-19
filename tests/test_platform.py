@@ -554,3 +554,80 @@ def test_detect_device_return_keys():
     assert isinstance(result["device_str"], str)
     assert isinstance(result["reason"], str)
     assert result["accelerator"] in ("gpu", "cpu", "mps")
+
+
+# ---------------------------------------------------------------------------
+# P1 补测：env_check Keras 残留 / 核心包缺失 / conda 不匹配
+# ---------------------------------------------------------------------------
+
+
+class TestEnvCheckExtended:
+    """env_check 的补充检测分支——全用 mock 注入，不依赖真实环境。"""
+
+    def test_env_check_keras_residual_detected(self, monkeypatch):
+        """TF 已移除但 keras 残留 → warn。"""
+        import importlib.metadata as _ilm
+        from scrna_integration import platform as _plat
+        _orig = _ilm.version
+
+        def _fake_version(pkg):
+            if pkg == "keras":
+                return "3.9.0"
+            if pkg == "tensorflow":
+                return None  # TF 已移除
+            return _orig(pkg)
+
+        monkeypatch.setattr(_ilm, "version", _fake_version)
+        result = _plat.env_check(expected_env="scrna-integration", verbose=False)
+        # keras 残留检测记录在 checks 列表的 ("warn", msg) 元组中
+        assert any(
+            "keras" in str(c).lower()
+            for c in result["checks"]
+        )
+
+    def test_env_check_core_pkg_missing_scanpy(self, monkeypatch):
+        """核心包 scanpy 缺失 → ok=False + error 项。"""
+        import importlib.metadata as _ilm
+        from scrna_integration import platform as _plat
+        _orig = _ilm.version
+
+        def _fake_version(pkg):
+            if pkg == "scanpy":
+                return None  # 未安装
+            return _orig(pkg)
+
+        monkeypatch.setattr(_ilm, "version", _fake_version)
+        result = _plat.env_check(expected_env="scrna-integration", verbose=False)
+        assert result["ok"] is False
+        assert any("scanpy" in str(c) for c in result["checks"])
+
+    def test_env_check_conda_env_mismatch(self, monkeypatch):
+        """当前 conda 环境名与期望不一致 → warn。"""
+        from scrna_integration import platform as _plat
+        monkeypatch.setenv("CONDA_DEFAULT_ENV", "base")
+        monkeypatch.delenv("CONDA_PREFIX", raising=False)
+        result = _plat.env_check(expected_env="scrna-integration", verbose=False)
+        assert any("期望" in w for w in result["warnings"])
+
+
+# ---------------------------------------------------------------------------
+# P1 补测：detect_device for_method 未知值时行为
+# ---------------------------------------------------------------------------
+
+
+class TestDetectDeviceEdgeCases:
+    """detect_device 边界场景。"""
+
+    def test_detect_device_for_method_unknown_uses_mps(self, monkeypatch):
+        """cuda=False/mps=True/for_method='unknown' → 以 MPS 处理（非 scvi/scanvi/sccraft）。"""
+        from scrna_integration.platform import detect_device
+
+        mock_torch = MagicMock()
+        mock_torch.cuda.is_available.return_value = False
+        mock_torch.backends.mps.is_available.return_value = True
+        monkeypatch.setitem(sys.modules, "torch", mock_torch)
+
+        result = detect_device(prefer="auto", for_method="unknown")
+        # 非已知方法 → 不触发 scVI/scANVI/scCRAFT 的 CPU 回退 → 使用 MPS
+        assert result["accelerator"] == "mps"
+        assert result["device_str"] == "mps"

@@ -393,6 +393,44 @@ class TestMergeIntoManifest:
 
 
 # ---------------------------------------------------------------------------
+# P1 xfail: merge_into_manifest — 已有 value_mapping 条目非 dict 时崩溃
+# ---------------------------------------------------------------------------
+
+
+class TestMergeIntoManifestBug:
+    """确认 bug：manifest 中 value_mapping 某条目是 string 而非 dict 时崩溃。"""
+
+    @pytest.mark.xfail(
+        reason=(
+            "BUG: merge_into_manifest 未检查 existing_val[norm_name] 是否为 dict"
+            "（_llm_proposer.py:318）。当手动编辑 YAML 把 value_mapping 某 key"
+            "误写为 plain string 而非 dict 时，line 318 'src_val not in "
+            "existing_val[norm_name]' 对 string 做子串匹配，line 319"
+            " existing_val[norm_name][src_val]=norm_val 导致 TypeError 崩溃。"
+            "修复方向：line 315 后加 isinstance(existing_val.get(norm_name), dict) 守卫"
+        ),
+        strict=True,
+    )
+    def test_value_mapping_existing_str_not_dict_crashes(self, sample_manifest):
+        """manifest 已有 value_mapping.disease='not_a_dict'（string）→ 应优雅处理而非崩溃。"""
+        manifest = dict(sample_manifest)
+        manifest["value_mapping"] = {"disease": "not_a_dict"}  # 手动 YAML 编辑误写
+        proposal = {
+            "obs_mapping": {},
+            "value_mapping": {
+                "disease": {"CAG": "atrophic_gastritis"},
+            },
+            "ontology": {},
+            "rationale": "",
+        }
+        # 期望：不崩溃，优雅跳过非 dict 条目
+        # 当前行为：TypeError 崩溃
+        result = _llm.merge_into_manifest(manifest, proposal)
+        # 即使 manifest 原值为 string，也不应崩溃
+        assert isinstance(result, dict)
+
+
+# ---------------------------------------------------------------------------
 # write_manifest + round-trip
 # ---------------------------------------------------------------------------
 

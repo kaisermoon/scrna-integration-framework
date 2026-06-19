@@ -1522,3 +1522,262 @@ class TestConsistencyCheck:
                     x for x in w if "consistency_check" in str(x.message)
                 ]
                 assert len(cc_warnings) == 0
+
+
+# ---------------------------------------------------------------------------
+# P1 补测：clinical join 分支覆盖（strict / column_mapping / manifest_field 缺失 /
+#         value_mapping / 行膨胀已由 TestClinicalKeyTypeAlignment 覆盖）
+# ---------------------------------------------------------------------------
+
+
+class TestClinicalJoinBranches:
+    """clinical_metadata 配置的五个分支覆盖。
+
+    已由既有测试覆盖：行膨胀（test_row_count_warns_on_change）。
+    """
+
+    def test_on_missing_strict_raises_file_not_found(self):
+        """on_missing='strict' + 文件不存在 → 抛出 FileNotFoundError。"""
+        adata = _make_synthetic_adata(n_cells=8)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+            manifest = _make_manifest_yaml({
+                "input": {"format": "h5ad", "path": h5ad_path},
+                "clinical_metadata": [{
+                    "file": os.path.join(tmpdir, "nonexistent.csv"),
+                    "join_on": {
+                        "manifest_field": "sample_id",
+                        "table_column": "sample_id",
+                    },
+                    "on_missing": "strict",
+                }],
+            })
+            mpath = _write_manifest(manifest, tmpdir)
+            with pytest.raises(FileNotFoundError, match="未找到"):
+                read_with_manifest(mpath)
+
+    def test_column_mapping_renames_columns(self):
+        """column_mapping 将外部表列名重命名为标准列名。"""
+        adata = _make_synthetic_adata(n_cells=8)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+
+            csv_path = os.path.join(tmpdir, "clinical.csv")
+            pd.DataFrame({
+                "sample_id": [f"sample_{i}" for i in range(4)],
+                "Age_at_diagnosis": [45, 52, 38, 61],
+                "Gender": ["M", "F", "F", "M"],
+            }).to_csv(csv_path, index=False)
+
+            manifest = _make_manifest_yaml({
+                "input": {"format": "h5ad", "path": h5ad_path},
+                "clinical_metadata": [{
+                    "file": csv_path,
+                    "join_on": {
+                        "manifest_field": "sample_id",
+                        "table_column": "sample_id",
+                    },
+                    "column_mapping": {
+                        "age": "Age_at_diagnosis",
+                        "sex": "Gender",
+                    },
+                }],
+            })
+            mpath = _write_manifest(manifest, tmpdir)
+            result = read_with_manifest(mpath)
+
+        # 重命名应生效
+        assert "age" in result.obs.columns
+        assert "sex" in result.obs.columns
+        # 原始列名不应存在（已被重命名）
+        assert "Age_at_diagnosis" not in result.obs.columns
+        assert "Gender" not in result.obs.columns
+        sample0 = result.obs[result.obs["sample_id"] == "sample_0"]
+        assert (sample0["age"] == 45).all()
+        assert (sample0["sex"] == "M").all()
+
+    def test_manifest_field_not_in_obs_warns(self):
+        """join_on.manifest_field 不在 obs 中时 warn 但不崩溃。"""
+        adata = _make_synthetic_adata(n_cells=8)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+
+            csv_path = os.path.join(tmpdir, "clinical.csv")
+            pd.DataFrame({
+                "pid": ["P001", "P002"],
+                "age": [45, 52],
+            }).to_csv(csv_path, index=False)
+
+            manifest = _make_manifest_yaml({
+                "input": {"format": "h5ad", "path": h5ad_path},
+                "clinical_metadata": [{
+                    "file": csv_path,
+                    "join_on": {
+                        "manifest_field": "patient_id",  # 不存在
+                        "table_column": "pid",
+                    },
+                }],
+            })
+            mpath = _write_manifest(manifest, tmpdir)
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                result = read_with_manifest(mpath)
+                field_warnings = [
+                    x for x in w if "未找到" in str(x.message)
+                    and "patient_id" in str(x.message)
+                ]
+                assert len(field_warnings) >= 1
+            assert isinstance(result, anndata.AnnData)
+
+    def test_value_mapping_in_clinical_table(self):
+        """临床表的 value_mapping 统一取值（如 M→male, F→female）。"""
+        adata = _make_synthetic_adata(n_cells=12)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+
+            csv_path = os.path.join(tmpdir, "clinical.csv")
+            pd.DataFrame({
+                "sample_id": [f"sample_{i}" for i in range(4)],
+                "sex": ["M", "F", "F", "M"],
+            }).to_csv(csv_path, index=False)
+
+            manifest = _make_manifest_yaml({
+                "input": {"format": "h5ad", "path": h5ad_path},
+                "clinical_metadata": [{
+                    "file": csv_path,
+                    "join_on": {
+                        "manifest_field": "sample_id",
+                        "table_column": "sample_id",
+                    },
+                    "value_mapping": {
+                        "sex": {"M": "male", "F": "female"},
+                    },
+                }],
+            })
+            mpath = _write_manifest(manifest, tmpdir)
+            result = read_with_manifest(mpath)
+
+        assert "sex" in result.obs.columns
+        unique_sex = result.obs["sex"].dropna().unique()
+        assert "male" in unique_sex
+        assert "female" in unique_sex
+        assert "M" not in unique_sex
+        assert "F" not in unique_sex
+
+
+# ---------------------------------------------------------------------------
+# P1 补测：_warn_layer2 null/空值 + 可疑占位符
+# ---------------------------------------------------------------------------
+
+
+class TestWarnLayer2Extended:
+    """_warn_layer2 的补充分支：null+空值 与 可疑占位符警告。"""
+
+    def test_null_and_empty_values_warn(self):
+        """Layer2 字段含 null 或空字符串时发出警告。"""
+        adata = _make_synthetic_adata(n_cells=10)
+        # 注入 disease 列：半数 null，半数空字符串
+        adata.obs["disease"] = [np.nan] * 5 + [""] * 5
+        # 给其他字段填值以避免干扰
+        for field in ["tissue", "assay", "sex", "development_stage"]:
+            adata.obs[field] = "known"
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            _warn_layer2(adata)
+            # 针对 disease 的缺失警告
+            disease_warnings = [
+                x for x in w if "disease" in str(x.message) and "缺失或空值" in str(x.message)
+            ]
+            assert len(disease_warnings) >= 1
+            msg = str(disease_warnings[0].message)
+            assert "10/" in msg  # 10 个问题值 / 10 个细胞
+
+    def test_suspicious_placeholder_values_warn(self):
+        """Layer2 字段含 'unknown'/'NA' 等可疑占位符时发出警告。"""
+        adata = _make_synthetic_adata(n_cells=12)
+        # 注入 sex 列：含 unknown 和 NA
+        adata.obs["sex"] = ["male", "female", "unknown", "NA", "male", "female",
+                            "n/a", "none", "male", "female", "male", "female"]
+        for field in ["disease", "tissue", "assay", "development_stage"]:
+            adata.obs[field] = "known"
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            _warn_layer2(adata)
+            suspicious_warnings = [
+                x for x in w if "可疑占位符" in str(x.message)
+            ]
+            assert len(suspicious_warnings) >= 1
+            msg = str(suspicious_warnings[0].message)
+            assert "sex" in msg
+
+
+# ---------------------------------------------------------------------------
+# P1 补测：obs_mapping 源列缺失 + value_mapping 目标列缺失
+# ---------------------------------------------------------------------------
+
+
+class TestObsMappingSourceMissing:
+    """obs_mapping 源列不存在时 warn 不崩溃。"""
+
+    def test_obs_mapping_source_col_missing_warns(self):
+        """obs_mapping 指定的源列在 adata.obs 中不存在时发出警告。"""
+        adata = _make_synthetic_adata(n_cells=10)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+            manifest = _make_manifest_yaml({
+                "input": {"format": "h5ad", "path": h5ad_path},
+                "obs_mapping": {"disease": "nonexistent_source_col"},
+            })
+            mpath = _write_manifest(manifest, tmpdir)
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                result = read_with_manifest(mpath)
+                missing_warnings = [
+                    x for x in w if "源列" in str(x.message)
+                    and "nonexistent_source_col" in str(x.message)
+                ]
+                assert len(missing_warnings) >= 1
+            assert isinstance(result, anndata.AnnData)
+
+
+class TestValueMappingTargetMissing:
+    """value_mapping 目标列在 obs 中不存在时 warn。
+
+    注意——io.py:95 存在 P2 bug：``if obs_mapping:`` 为 falsy 时整个
+    value_mapping 循环被跳过。因此本测试必须传一个非空的 obs_mapping
+    来绕过该 bug，使 value_mapping 代码可达。
+    """
+
+    def test_value_mapping_target_col_missing_warns(self):
+        """value_mapping 的目标列不在 obs 中时 warn。"""
+        adata = _make_synthetic_adata(n_cells=10)
+        # 需要一个真实存在的 obs 列作为 obs_mapping 的源列，
+        # 以绕过 io.py:95 的 ``if obs_mapping:`` falsy 跳过 bug
+        adata.obs["real_col"] = ["val"] * 10
+        with tempfile.TemporaryDirectory() as tmpdir:
+            h5ad_path = os.path.join(tmpdir, "test.h5ad")
+            adata.write_h5ad(h5ad_path)
+            manifest = _make_manifest_yaml({
+                "input": {"format": "h5ad", "path": h5ad_path},
+                "obs_mapping": {"dummy": "real_col"},  # workaround P2 bug
+                "value_mapping": {
+                    "nonexistent_target_col": {"A": "B"},
+                },
+            })
+            mpath = _write_manifest(manifest, tmpdir)
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                result = read_with_manifest(mpath)
+                missing_warnings = [
+                    x for x in w if "value_mapping" in str(x.message).lower()
+                    and "未找到" in str(x.message)
+                ]
+                assert len(missing_warnings) >= 1
+            assert isinstance(result, anndata.AnnData)

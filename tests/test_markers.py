@@ -91,3 +91,30 @@ class TestLoadMarkersEmptyTemplate:
         """Negative-only filter on empty template -> empty dict."""
         r = load_markers(empty_csv, roles=("negative",))
         assert r == {}
+
+
+# ---------------------------------------------------------------------------
+# P1 xfail: load_markers roles=str（纯字符串而非 tuple）跨 pandas 版本脆弱
+# ---------------------------------------------------------------------------
+
+
+class TestLoadMarkersRolesBug:
+    """确认 bug：roles 传纯字符串时缺乏类型守卫。"""
+
+    @pytest.mark.xfail(
+        reason=(
+            "BUG: load_markers roles=str 时缺少类型守卫（markers.py:82）。"
+            "pandas<2.0：isin(str) 按字符迭代静默返回 {}；"
+            "pandas>=2.0：抛 TypeError 但报英文内部信息。"
+            "修复方向：if isinstance(roles, str): raise TypeError('roles 必须为 list，不能传字符串')"
+        ),
+        strict=True,
+    )
+    def test_roles_str_raises_typeerror(self, markers_csv):
+        """roles='canonical' 纯字符串应触发中文 TypeError，非依赖 pandas 内部报错。"""
+        # 期望：产品代码加守卫后抛出中文 TypeError
+        # 当前（无守卫）：pandas>=2.0 抛英文 TypeError（不匹配中文），
+        #                pandas<2.0 静默返回 {}（不抛异常）。
+        # 两种情况均不满足 match="必须为 list"，测试保持红色直到 bug 修复。
+        with pytest.raises(TypeError, match="必须为 list"):
+            load_markers(markers_csv, roles="canonical")
