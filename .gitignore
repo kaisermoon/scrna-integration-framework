@@ -99,3 +99,4 @@ references/*
 !references/disease_ontology/**
 results/_monocle3_10b_tmp/
 results/_cytotrace2_10d_tmp/
+.coverage
