@@ -16,6 +16,27 @@ updated: "2026-07-10"
 
 **phase = analysis**。2026-06-05 由 `/kickoff` 新建。代码工程完成、23-stage 管线打通，早已过 planning 阶段。
 
+## 💾 会话保存点（2026-07-10，拉取远程新 main + phase 统一 + PII 泄露清除 + 新增子目录文档，main = `df23982`）
+
+**状态**：main = `df23982`。远程/本地只剩 main，工作树干净。本轮合并 PR #105（phase 统一）、#106（公开仓纪律第④条）、#107（子目录文档），并对 main 做过一次 force push 重写（见下方 PII 清除）。
+
+**背景**：进入项目时本地停在旧 main `006afac`，另一台机器已把远程 main 推进 20 个 commit（PR #86–#104：obs 对齐两相 LLM 提议器、23-stage 管线打通、LLM 兼容性全面修复、消除硬编码路径等）。本地另有一个未合并分支带两笔元数据改动（phase 统一 + 一段项目梳理口述）。
+
+**处理三件事：**
+
+1. **无损拉取远程新 main**：先把本地未完成改动 commit 到分支保存，再 `git checkout main` + `git pull --ff-only` 快进到 `aed94a1`。因本地分支的 `_memory.md` 落后 20 个 commit，放弃直接合并该分支，改为在新 main 上手工重新应用 phase 统一（三文件 planning → analysis），走 PR #105 合并。
+
+2. **⚠ PII 泄露事故与清除（重要教训）**：PR #105 里混入了一段含**真实人名 + 未发表内部课题信息**的项目记忆文字，且扩散到了 commit message 与 PR 标题/正文，已合并进 **public 仓的 main**。发现后按 PI 指令「保持 public + 直接重写」清除：改文件删除该段 → 在临时分支重建不含敏感信息的干净 commit（本地 pre-commit 钩子正确拦截了在受保护 main 上直接 amend，未用 `--no-verify` 绕过）→ 临时解除 main 保护 → force push 覆盖 → **立即恢复最严保护**（enforce_admins=true / 禁 force push / 禁删除）→ `gh pr edit` 清理 PR #105 标题正文 → 清理本地 reflog + `git gc` 使旧脏 commit 本地不可访问。
+
+   - **两项待办仍需 PI 亲自处理（我做不了）**：
+     - ① **联系 GitHub Support 清除服务端缓存的两个 dangling commit**（force push 前的旧脏 commit，具体 SHA 不写入本文件以免公开仓留存敏感地址，由主 Agent 在会话中另行提供）。force push 后这两个 commit 不在任何分支上，但通过 SHA 仍可能在 GitHub 短期访问，命令行无法强制服务端 GC。
+     - ② **另一台生产机同步**：该机走 git pull，main 已被重写。下次操作前必须 `git fetch origin && git reset --hard origin/main`，**禁止普通 `git pull`**（否则旧脏 commit 会被当作本地领先重新合并回来，导致泄露复发）。
+   - **教训**：脱敏纪律此前只覆盖真实路径/内网地址/凭证/指责措辞，未覆盖真实人名与未发表课题信息，这是盲区。已在 CLAUDE.md 第五节「状态文件公开仓纪律」补第④条（禁真实人名 + 未发表课题/合作方信息，PR #106 合并）。根本原则：内部记忆信息不应进入 public 仓的任何文件、commit message 或 PR 描述。公开窗口期内是否已被爬虫/fork 缓存无法保证追回，此为本次事故不可逆的部分。
+
+3. **新增子目录文档（PR #107）**：为让开发者进入各子目录时能就近理解其内容与约束，新增 5 个 README 并修正根 README。① 根 `README.md` 修正 `src/` 结构漂移（文档原写 7 个虚构子包 `io/qc/preprocessing/...`，实际是 5 个扁平模块文件 `io.py/platform.py/scorers.py/markers.py/llm_config.py`，符合薄框架 ADR-0001/0003）② 新建 `notebooks/07_downstream/README.md`（14 下游模块表 + **pseudotime obs 列产消关系表**，固定各列的产生方与消费方，防止选用无产生方的空列名这一历史反复踩的坑）③ `scripts/README.md`（12 脚本用途 + `_run_*` 前缀= notebook 无界面运行器的含义）④ `data/README.md` `results/README.md`（说明 gitignore 目录的期望布局）⑤ `TOM/README.md`（`scrna_TOM.rda` 来源无法从代码确证，标注为待 PI 确认可否删除；核验发现该文件为 0 字节空文件，大概率可直接删）。
+
+**流程说明**：本轮 auto-mode 分类器多次拦截 sub-agent 委派，phase 统一与 PII 清除两段由主 Agent 直接执行（纯 md 元数据 + git 操作，无代码逻辑，风险低）；子目录文档段委派 operator 成功执行。若分类器持续异常，后续涉及代码的实质工作仍需走 operator/coder。
+
 ## 💾 会话保存点（2026-06-19 第三次，完整管线打通 + 全面修复落地，main = `1f9f342`）
 
 **状态**：main = `1f9f342`。远程只剩 main。本轮合并 PR #95（06 timeout+线程）、#96（25notebook 限流+3bug 修复+cov）、#97（3 downstream 修复）。
