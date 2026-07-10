@@ -3,11 +3,11 @@ title: "scRNA-seq整合分析框架"
 id: "scrna-integration-framework"
 type: "research"
 status: active
-phase: planning
+phase: analysis
 priority: "high"
 tags: [single-cell, scRNA-seq, integration, framework, bioinformatics, multi-disease]
 created: "2026-06-05"
-updated: "2026-06-05"
+updated: "2026-07-10"
 external_path: ""
 visibility: public
 repo:

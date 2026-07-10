@@ -1,7 +1,7 @@
 ---
 title: "执行计划：scRNA-seq整合分析框架"
-updated: "2026-06-10"
-phase: planning
+updated: "2026-07-10"
+phase: analysis
 ---
 
 ## C 域收尾（2026-06-10 完成）
