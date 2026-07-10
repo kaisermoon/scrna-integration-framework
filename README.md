@@ -18,14 +18,15 @@
 
 ```
 .
-├── src/                  # 模块化 Python 包
-│   ├── io/              # 多源数据读取与 schema 标准化
-│   ├── qc/              # 质控与过滤
-│   ├── preprocessing/   # normalize / HVG
-│   ├── embedding/       # PCA / Harmony / scVI / scANVI
-│   ├── clustering/      # Leiden / 参数扫描
-│   ├── annotation/      # marker / LLM / scANVI / AUCell / UCell
-│   └── downstream/      # DEG / 拟时序 / GRN
+├── src/scrna_integration/   # 扁平 Python 包（薄框架,5 个模块文件,无子包）
+│   ├── io.py                #   多源数据读取 + manifest 驱动的 obs 标准化（唯一入口 read_with_manifest）
+│   ├── platform.py          #   操作系统/路径/计算设备检测的唯一收口处（ADR-0010、ADR-0013）
+│   ├── scorers.py           #   整合质量指标函数（silhouette、ARI 等,纯函数无抽象）
+│   ├── markers.py           #   标记物库 CSV 加载器 load_markers（ADR-0005）
+│   └── llm_config.py        #   从 vault 根 .env 读取 LLM 分组配置
+
+> 去批次、聚类、注释、下游分析等步骤**不在 `src/` 内实现为模块**,而是直接写在对应的 `notebooks/` 里（薄框架原则,见 ADR-0001、ADR-0003）。`src/` 只收纳被多个 notebook 反复复用、且独立测试有价值的逻辑。
+
 ├── notebooks/           # 编号流水线 notebook（01_io → 09_downstream）
 ├── scripts/             # 一次性工具脚本
 ├── tests/               # pytest 单元测试
