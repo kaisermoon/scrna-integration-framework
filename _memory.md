@@ -2,8 +2,8 @@
 title: "项目记忆：scRNA-seq整合分析框架"
 type: project-memory
 project_id: "scrna-integration-framework"
-last_session: "2026-06-17"
-updated: "2026-06-19c"
+last_session: "2026-07-10"
+updated: "2026-07-10"
 ---
 
 # 项目记忆：scRNA-seq整合分析框架
@@ -14,7 +14,7 @@ updated: "2026-06-19c"
 
 ## 当前状态
 
-**phase = planning**。2026-06-05 由 `/kickoff` 新建。
+**phase = analysis**。2026-06-05 由 `/kickoff` 新建。代码工程完成、23-stage 管线打通，早已过 planning 阶段。
 
 ## 💾 会话保存点（2026-06-19 第三次，完整管线打通 + 全面修复落地，main = `1f9f342`）
 
