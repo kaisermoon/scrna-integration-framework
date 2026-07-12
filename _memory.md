@@ -2,8 +2,8 @@
 title: "项目记忆：scRNA-seq整合分析框架"
 type: project-memory
 project_id: "scrna-integration-framework"
-last_session: "2026-07-10"
-updated: "2026-07-10"
+last_session: "2026-07-12"
+updated: "2026-07-12"
 ---
 
 # 项目记忆：scRNA-seq整合分析框架
@@ -15,6 +15,27 @@ updated: "2026-07-10"
 ## 当前状态
 
 **phase = analysis**。2026-06-05 由 `/kickoff` 新建。代码工程完成、23-stage 管线打通，早已过 planning 阶段。
+
+## 💾 会话保存点（2026-07-12，全项目优化方案 8 批全部落地，main = `7f6de40`）
+
+**状态**：main = `7f6de40`，远程/本地只剩 main，工作树干净。基于 `docs/优化方案-20260710.md`（PI 五轮裁定终审）串行执行 8 批重构，全部合并闭环。每批走「coder（worktree/主树隔离）→ 独立 code-reviewer 新会话审 diff → 修 issue → PR → CI 绿 → squash 合并」标准循环。
+
+**8 批成果（对应 PR）**：
+- 批1 P0 正确性 F1-F4（PR #110）：SoupX 视图赋值改 CSR 整数索引写回 + 差异断言；双重标准化 preprocessing_done 全链路传播（nowicki→02→03）+ 整数检查升级为硬阻断；基因 ID 轴大小写统一断言前移 per-dataset；PER_SAMPLE_MAD 敏感度曲线与过滤同口径。
+- 批2 参考骨架 + src 拆解（PR #111）：新建 `bootstrap.py`（启动脚手架进 src，一行 init() 替代 20 行样板 + 找不到根 raise RuntimeError）+ `01_template_10x.ipynb`（13 步全功能骨架）+ kim 数据读入拆回 cell。
+- 批3 四 per-dataset 重写（PR #112）：kim/nancang/yue/nowicki 按骨架重写，io 逻辑全回 cell，长出真实差异（10x_mtx/txt.gz/h5ad/skip 各格式 + N_MAD/SoupX/Scrublet 参数差异）。
+- 批4 02/03 适配（PR #113）：02 删大小写兜底 + 加基因数坍塌预警；03 归一化决策诊断。
+- 批5 llm_config 收编 LLM 调用 B5/B6/B8（PR #115，注意 #114 因删远程分支被误 CLOSED 后重开）：新增 5 函数统一 06/06b/06c 三处 anthropic/openai 分支 + verdict 解析（死代码转公开）+ mLLMCelltype patch 显式化；补 29 测试。**CI 曾因新测试 import requests/openai（CI 无此库）失败 → 加 skipif 探测修复**。
+- 批6 04/05 全方法兼容 + 双模式推荐 B1/B3（PR #118，注意 #116 同样被误 CLOSED 后重开）：04 EMBEDDING_METHODS 默认 pca/harmony/scvi/scanvi 全启用（sccraft 移除留 TODO）+ metrics obsm 存在性守卫 + integration_metrics 内联；05 四模式分辨率推荐无自动选择 + clustering_metrics 内联。
+- 批7 06/06b/06c 注释交叉比对 B2/B4/B7/B9（PR #117）：交叉比对按实际方法数动态（marker 开关/scANVI 修复启用/基因集评分纳入）；默认多模型共识；06/06c 签名统一；OUTPUT_VERSION 常量集中。
+- 批8 下游编号 + scripts 清理 + 文档漂移（PR #119）：07_downstream 07-16 → D01-D14 前缀命名（git rename 保留历史，10d→D07_potency 语义订正）；删 3 个 `_run_*` + run_pipeline_test→smoke_run_notebooks + /tmp 改 tempfile；`_project.md` 子模块表对齐实际扁平结构。
+
+**⚠ 待 PI 亲自处理（reviewer 标注，本轮未做，非阻塞）**：
+1. **scANVI + B7 多模型共识需真跑验证**：批7 scANVI cell 代码完整但 scVI 训练超时无法 agent 端验证（需 PI 填 REFERENCE_ATLAS_PATH 在 jupyter 跑）；多模型共识实际 API 往返需 PI 配 key 验证。
+2. **D04 notebook 名 vs 产物名 `10_pseudotime_v1.h5ad` 语义不一致**：批8 只改文件名未动运行时产物名（属数据契约变更，超命名批范围）。若要统一需另开数据契约批，同步改产物名 + 全下游 UPSTREAM_PATH + uns 键 + D08 比较表。
+3. **SPEC.md 无编号名与实现既存漂移**（批8 reviewer 标注，未触，独立文档批处理）。
+
+**关键教训（已写记忆 [[verify-git-merge-with-gh-api]]）**：本轮多次出现 shell 输出幻象——`gh pr merge` 后 shell 回显"fast-forward 成功"但远程 main 实际未动（PR #116/#117 一度显示未合并）。**合并后必须用 `gh api repos/{owner}/{repo}/commits/main --jq .sha` 或 `gh pr view --json state,mergedAt` 权威核实，不能信 shell 的合并回显**。另：删远程分支会导致关联开着的 PR 自动 CLOSED（#114/#116 栽在此）——**先确认合并落地，再删分支**。
 
 ## 💾 会话保存点（2026-07-10，拉取远程新 main + phase 统一 + PII 泄露清除 + 新增子目录文档，main = `df23982`）
 
