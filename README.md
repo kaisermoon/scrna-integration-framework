@@ -18,16 +18,15 @@
 
 ```
 .
-├── src/scrna_integration/   # 扁平 Python 包（薄框架,5 个模块文件,无子包）
-│   ├── io.py                #   多源数据读取 + manifest 驱动的 obs 标准化（唯一入口 read_with_manifest）
+├── src/scrna_integration/   # 扁平 Python 包（薄框架,4 个模块文件,无子包）
+│   ├── bootstrap.py         #   启动脚手架：项目根定位 + BLAS 线程设置（notebook 顶部一行调用）
 │   ├── platform.py          #   操作系统/路径/计算设备检测的唯一收口处（ADR-0010、ADR-0013）
-│   ├── scorers.py           #   整合质量指标函数（silhouette、ARI 等,纯函数无抽象）
-│   ├── markers.py           #   标记物库 CSV 加载器 load_markers（ADR-0005）
-│   └── llm_config.py        #   从 vault 根 .env 读取 LLM 分组配置
+│   ├── llm_config.py        #   从 vault 根 .env 读取 LLM 分组配置 + 统一 LLM 调用 + mLLMCelltype 适配
+│   └── io.py                #   基因 ID 双向同步 + 基因组位置注入 + batch 键诊断（纯技术管道）
 
-> 去批次、聚类、注释、下游分析等步骤**不在 `src/` 内实现为模块**,而是直接写在对应的 `notebooks/` 里（薄框架原则,见 ADR-0001、ADR-0003）。`src/` 只收纳被多个 notebook 反复复用、且独立测试有价值的逻辑。
+> 去批次、聚类、注释、下游分析等步骤**不在 `src/` 内实现为模块**,而是直接写在对应的 `notebooks/` 里（薄框架原则,见 ADR-0001、ADR-0003）。`src/` 只收纳无科研价值的技术管道（分析逻辑一律留 notebook cell）。
 
-├── notebooks/           # 编号流水线 notebook（01_io → 09_downstream）
+├── notebooks/           # 编号流水线 notebook（00 → 01_per_dataset → 02 → 03 → 04 → 05 → 06/06b/06c → 07_downstream/D01-D14）
 ├── scripts/             # 一次性工具脚本
 ├── tests/               # pytest 单元测试
 ├── data/                # 外部原始数据（gitignore）
@@ -118,26 +117,6 @@ PARAMS = {
 ## 标记物库
 
 框架提供标记物库（`references/markers/`），用于管理细胞类型与标记基因的对应关系。标记物库由 PI（消化科专家）维护，框架**不预置任何真实标记物基因**——所有标记物内容由 PI 亲自填写。
-
-**快速开始**：
-
-```python
-from scrna_integration import load_markers
-
-# 加载标记物（默认返回 canonical + optional 标记物）
-markers = load_markers("references/markers/gastric_epithelial.csv")
-
-# 使用前检查基因存在性（不同数据集基因集不同——必须检查）
-for cell_type, genes in markers.items():
-    present = [g for g in genes if g in adata.var_names]
-    missing = [g for g in genes if g not in adata.var_names]
-    if missing:
-        print(f"[{cell_type}] {len(missing)} genes missing: {missing}")
-    markers[cell_type] = present
-
-# 在 dotplot 中使用
-sc.pl.dotplot(adata, var_names=markers, groupby="leiden")
-```
 
 详细说明见 [`references/markers/README.md`](references/markers/README.md)（字段定义、role 取值规则、PMID 硬要求、面向消化科专家的填写指南）。
 

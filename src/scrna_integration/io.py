@@ -318,8 +318,8 @@ def summarize_batch_keys(adata) -> None:
     供 PI 在多源合并后手动调用，排查 batch 键语义不一致等问题。
     纯确定性——零 LLM。不改动数据，仅打印诊断信息。
 
-    为什么需要独立函数而不是嵌入 read_with_manifest：batch 语义校验
-    发生在 anndata.concat 之后（stage1 多源合并 notebook 里），不在单源
+    为什么需要独立函数：batch 语义校验
+    发生在 anndata.concat 之后（per-dataset notebook 合并 cell 里），不在单源
     读取内。合并后的 adata 才具备完整的 batch 列对比上下文。
 
     Parameters

@@ -590,3 +590,189 @@ class TestBuildMLLMCelltypeConfig:
         assert model_list == ["claude-haiku-4-5"]
         assert api_keys == {"anthropic": "test-key"}
         assert "anthropic" in base_urls
+
+
+# ---------------------------------------------------------------------------
+# apply_mllmcelltype_patches
+# ---------------------------------------------------------------------------
+
+
+class TestApplyMLLMCelltypePatches:
+    """验证 apply_mllmcelltype_patches 对 mLLMCelltype 库内部函数的 monkey-patch。
+
+    patch 依赖 __defaults__ 位置元组，库升级可能静默错位。
+    这些测试 mock mLLMCelltype 内部模块，验证 patch 正确应用。
+    测试前清除 sys.modules 中所有 mllmcelltype 条目，避免真实安装版本干扰。
+    """
+
+    @staticmethod
+    def _make_mock_modules():
+        """构建模拟的 mllmcelltype 模块树，返回 (pkg, functions, common, anthropic)。"""
+        from unittest.mock import MagicMock
+        import types
+
+        # 空壳 package 模块
+        mock_requests = MagicMock(name="requests")
+
+        # mllmcelltype.providers.common — 含 call_http_api_with_retry
+        mock_common = types.ModuleType("mllmcelltype.providers.common")
+        mock_http_call = MagicMock(name="call_http_api_with_retry")
+        mock_http_call.__defaults__ = (1, 1, 30, False, ())
+        mock_common.call_http_api_with_retry = mock_http_call
+        mock_openai_call = MagicMock(name="call_openai_compatible_api")
+        mock_openai_call.__defaults__ = (4096, None, (), None, None, None, False)
+        mock_common.call_openai_compatible_api = mock_openai_call
+
+        # mllmcelltype.providers.anthropic
+        mock_anthropic = types.ModuleType("mllmcelltype.providers.anthropic")
+
+        def _orig_parse_anthropic_response(content):
+            return [
+                line.rstrip(",")
+                for block in content.get("content", [])
+                if block.get("type") == "text" and "text" in block
+                for line in block["text"].strip().split("\n")
+            ]
+        mock_anthropic._parse_anthropic_response = _orig_parse_anthropic_response
+
+        def _resolve_url(provider, provider_name, base_url):
+            if base_url:
+                return base_url + "/v1/messages"
+            return "https://api.anthropic.com/v1/messages"
+        mock_anthropic.resolve_endpoint_url = _resolve_url
+
+        def _resolve_model_name(model):
+            return model or "claude-haiku-4-5"
+        mock_anthropic._resolve_model_name = _resolve_model_name
+
+        # mllmcelltype.providers（中间包）
+        mock_providers = types.ModuleType("mllmcelltype.providers")
+        mock_providers.common = mock_common
+        mock_providers.anthropic = mock_anthropic
+
+        # mllmcelltype.functions
+        mock_functions = types.ModuleType("mllmcelltype.functions")
+        mock_functions.PROVIDER_FUNCTIONS = {}
+
+        # mllmcelltype（顶层包）
+        mock_pkg = types.ModuleType("mllmcelltype")
+        mock_pkg.functions = mock_functions
+        mock_pkg.providers = mock_providers
+
+        return mock_pkg, mock_functions, mock_common, mock_anthropic, mock_requests
+
+    @staticmethod
+    def _clear_mllmcelltype_from_modules():
+        """清除 sys.modules 中所有 mllmcelltype 条目。"""
+        import sys
+        for mod in list(sys.modules):
+            if mod.startswith("mllmcelltype"):
+                del sys.modules[mod]
+
+    def test_patch_sets_defaults_correctly(self, monkeypatch):
+        """patch 应正确设置 call_http_api_with_retry 的 __defaults__。"""
+        import sys
+
+        self._clear_mllmcelltype_from_modules()
+        mocks = self._make_mock_modules()
+        mock_pkg, mock_functions, mock_common, mock_anthropic, mock_requests = mocks
+
+        # 注入 mock 模块树
+        sys.modules["mllmcelltype"] = mock_pkg
+        sys.modules["mllmcelltype.functions"] = mock_functions
+        sys.modules["mllmcelltype.providers"] = mock_pkg.providers
+        sys.modules["mllmcelltype.providers.common"] = mock_common
+        sys.modules["mllmcelltype.providers.anthropic"] = mock_anthropic
+        sys.modules["requests"] = mock_requests
+
+        try:
+            from scrna_integration.llm_config import apply_mllmcelltype_patches
+
+            result = apply_mllmcelltype_patches(
+                max_retries=5,
+                retry_delay=3,
+                timeout=180,
+                request_json=False,
+                max_tokens_override=32768,
+            )
+            assert result is True
+
+            defaults = mock_common.call_http_api_with_retry.__defaults__
+            assert defaults[0] == 5
+            assert defaults[1] == 3
+            assert defaults[2] == 180
+            assert defaults[3] is False
+            assert defaults[4] == ()
+
+            oai_defaults = mock_common.call_openai_compatible_api.__defaults__
+            assert oai_defaults[0] == 32768
+        finally:
+            self._clear_mllmcelltype_from_modules()
+
+    def test_patch_registers_anthropic_provider(self, monkeypatch):
+        """patch 应正确注册 PROVIDER_FUNCTIONS["anthropic"] 且可调用。"""
+        import sys
+
+        self._clear_mllmcelltype_from_modules()
+        mocks = self._make_mock_modules()
+        mock_pkg, mock_functions, mock_common, mock_anthropic, mock_requests = mocks
+
+        sys.modules["mllmcelltype"] = mock_pkg
+        sys.modules["mllmcelltype.functions"] = mock_functions
+        sys.modules["mllmcelltype.providers"] = mock_pkg.providers
+        sys.modules["mllmcelltype.providers.common"] = mock_common
+        sys.modules["mllmcelltype.providers.anthropic"] = mock_anthropic
+        sys.modules["requests"] = mock_requests
+
+        try:
+            from scrna_integration.llm_config import apply_mllmcelltype_patches
+
+            result = apply_mllmcelltype_patches()
+            assert result is True
+
+            assert "anthropic" in mock_functions.PROVIDER_FUNCTIONS
+            fn = mock_functions.PROVIDER_FUNCTIONS["anthropic"]
+            assert callable(fn)
+
+            mock_common.call_http_api_with_retry.return_value = "B cell"
+            resp = fn(
+                prompt="Annotate cluster 0",
+                model="claude-haiku-4-5",
+                api_key="test-key",
+                base_url="http://127.0.0.1:8082",
+            )
+            assert resp == "B cell"
+
+            call_args = mock_common.call_http_api_with_retry.call_args
+            assert call_args is not None
+            _, kwargs = call_args
+            body = kwargs.get("body", {})
+            assert "max_tokens" in body
+            assert body.get("model") == "claude-haiku-4-5"
+        finally:
+            self._clear_mllmcelltype_from_modules()
+
+    def test_patch_returns_false_on_import_error(self, monkeypatch):
+        """库缺少必要子模块时应返回 False 而非抛异常。"""
+        import sys
+        import types
+
+        self._clear_mllmcelltype_from_modules()
+
+        # 注入一个残缺的 mllmcelltype 包（有 providers 但缺 functions），
+        # 使 import mllmcelltype.functions 失败。
+        bad_pkg = types.ModuleType("mllmcelltype")
+        bad_providers = types.ModuleType("mllmcelltype.providers")
+        bad_pkg.providers = bad_providers
+        # 故意不设 bad_pkg.functions
+
+        sys.modules["mllmcelltype"] = bad_pkg
+        sys.modules["mllmcelltype.providers"] = bad_providers
+
+        try:
+            from scrna_integration.llm_config import apply_mllmcelltype_patches
+
+            result = apply_mllmcelltype_patches()
+            assert result is False
+        finally:
+            self._clear_mllmcelltype_from_modules()
