@@ -56,9 +56,7 @@ repo:
 | 启动脚手架 | `src/scrna_integration/bootstrap.py` | 定位项目根 + BLAS 线程设置，notebook 顶部一行调用 |
 | 平台检测收口 | `src/scrna_integration/platform.py` | OS / CUDA / Rscript 路径检测，`detect_device()` 设备选择单点收口（ADR-0013） |
 | LLM 配置与调用 | `src/scrna_integration/llm_config.py` | 06 系列注释的多模型直连配置与标准调用 |
-| 多格式读取 | `src/scrna_integration/io.py` | 多源接入与 rds 跨语言 R 桥接（分析逻辑逐步拆回 notebook，见 `docs/优化方案-20260710.md`） |
-| 评分指标 | `src/scrna_integration/scorers.py` | QC / 聚类 / 整合 / 注释一致性纯函数（逐步拆回 notebook） |
-| marker 加载 | `src/scrna_integration/markers.py` | `load_markers` groupby/filter（逐步拆回 notebook） |
+| 多格式读取 | `src/scrna_integration/io.py` | 基因 ID 双向同步 + 基因组位置注入 + batch 键诊断（纯技术管道） |
 
 ### notebooks 分析流水线
 

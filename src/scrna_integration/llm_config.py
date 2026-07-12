@@ -346,7 +346,7 @@ def extract_json_from_llm_response(raw_text: str) -> dict | None:
     """从 LLM 文本回复中提取 JSON 字典。
 
     容忍多种格式：纯 JSON、`` ```json ````` 代码围栏、
-    键不带引号的宽松格式等。
+    嵌入文本中的 JSON 等。
 
     Parameters
     ----------
