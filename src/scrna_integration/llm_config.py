@@ -433,12 +433,16 @@ def build_mllmcelltype_config(
         provider = cfg.get("provider", "")
         key = cfg.get("api_key", "")
         url = cfg.get("base_url", "")
-        model = cfg.get("models", {}).get("haiku", "")
-        if model and key:
-            model_list.append(model)
-            api_keys[provider] = key
-            if url:
-                base_urls[provider] = _resolve_endpoint(url, provider)
+        # B7 默认多模型共识：取每个 group 所有已配置的模型档位
+        # （haiku / sonnet / opus），而非仅 haiku 单模型。
+        # 下游调用方根据模型数量判断是否启用 discussion 模式。
+        for _tier in ("haiku", "sonnet", "opus"):
+            _model = cfg.get("models", {}).get(_tier, "")
+            if _model and key:
+                model_list.append(_model)
+                api_keys[provider] = key
+                if url:
+                    base_urls[provider] = _resolve_endpoint(url, provider)
 
     if model_list_override:
         # api_keys 的键是 provider 名（如 "anthropic"），而
