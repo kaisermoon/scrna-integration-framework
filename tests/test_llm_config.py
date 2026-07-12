@@ -7,11 +7,16 @@ No real .env or network calls involved.
 from scrna_integration.llm_config import (
     _parse_dotenv,
     _find_vault_root,
+    _resolve_endpoint,
     load_llm_group_config,
     get_active_groups,
+    call_llm_for_annotation,
+    extract_json_from_llm_response,
+    build_mllmcelltype_config,
 )
 
 import pytest
+from unittest.mock import patch, MagicMock
 
 
 # ---------------------------------------------------------------------------
@@ -260,3 +265,274 @@ class TestGetActiveGroups:
         monkeypatch.setattr("os.getcwd", lambda: str(tmp_path))
         with pytest.raises(FileNotFoundError):
             get_active_groups(project_root=None)
+
+
+# ---------------------------------------------------------------------------
+# extract_json_from_llm_response
+# ---------------------------------------------------------------------------
+
+
+class TestExtractJsonFromLLMResponse:
+    def test_pure_json_dict(self):
+        result = extract_json_from_llm_response('{"cell_type": "B cell", "score": "0.95"}')
+        assert result == {"cell_type": "B cell", "score": "0.95"}
+
+    def test_json_code_fence(self):
+        raw = '```json\n{"cell_type": "T cell"}\n```'
+        result = extract_json_from_llm_response(raw)
+        assert result == {"cell_type": "T cell"}
+
+    def test_code_fence_without_lang(self):
+        raw = '```\n{"cell_type": "NK cell"}\n```'
+        result = extract_json_from_llm_response(raw)
+        assert result == {"cell_type": "NK cell"}
+
+    def test_code_fence_with_prefix_text(self):
+        raw = 'Here is the annotation:\n```json\n{"cell_type": "B cell"}\n```\nHope this helps.'
+        result = extract_json_from_llm_response(raw)
+        assert result == {"cell_type": "B cell"}
+
+    def test_embedded_dict_no_fence(self):
+        raw = 'The result is {"cell_type": "Macrophage"} for this cluster.'
+        result = extract_json_from_llm_response(raw)
+        assert result == {"cell_type": "Macrophage"}
+
+    def test_empty_input_returns_none(self):
+        assert extract_json_from_llm_response("") is None
+
+    def test_non_json_text_returns_none(self):
+        assert extract_json_from_llm_response("This is not JSON at all.") is None
+
+    def test_array_not_dict_returns_none(self):
+        raw = '```json\n["a", "b", "c"]\n```'
+        result = extract_json_from_llm_response(raw)
+        assert result is None
+
+    def test_filters_empty_and_null_values(self):
+        raw = '{"cell_type": "B cell", "empty": "", "null_val": null, "score": "0.9"}'
+        result = extract_json_from_llm_response(raw)
+        assert result == {"cell_type": "B cell", "score": "0.9"}
+
+    def test_nested_json_is_valid_dict(self):
+        """嵌套 dict 是合法 JSON，json.loads 正常解析后应成功返回 dict。"""
+        raw = '{"outer": {"inner": "value"}}'
+        result = extract_json_from_llm_response(raw)
+        # 嵌套 dict 是合法 dict，应成功返回
+        assert isinstance(result, dict)
+        assert "outer" in result
+
+
+# ---------------------------------------------------------------------------
+# _resolve_endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestResolveEndpoint:
+    def test_v1_slash_already_present(self):
+        assert _resolve_endpoint("http://127.0.0.1:8082/v1/", "anthropic") == "http://127.0.0.1:8082/v1/"
+
+    def test_empty_url(self):
+        assert _resolve_endpoint("", "anthropic") == ""
+
+    def test_unknown_provider_no_suffix(self):
+        assert _resolve_endpoint("http://127.0.0.1:8082", "unknown_provider") == "http://127.0.0.1:8082"
+
+    def test_trailing_slash_handled(self):
+        assert _resolve_endpoint("http://127.0.0.1:8082/", "anthropic") == "http://127.0.0.1:8082/v1/messages"
+
+    def test_anthropic_endpoint(self):
+        assert _resolve_endpoint("http://127.0.0.1:8082", "anthropic") == "http://127.0.0.1:8082/v1/messages"
+
+    def test_openai_endpoint(self):
+        assert _resolve_endpoint("https://api.openai.com", "openai") == "https://api.openai.com/v1"
+
+    def test_v1_no_trailing_slash_no_double_write(self):
+        """Issue #7 regression: base_url="/v1" (无尾斜杠) 不应双写成 /v1/v1/messages。"""
+        assert _resolve_endpoint("http://127.0.0.1:8082/v1", "anthropic") == "http://127.0.0.1:8082/v1"
+
+    def test_v1_messages_already_complete(self):
+        assert _resolve_endpoint("http://127.0.0.1:8082/v1/messages", "anthropic") == "http://127.0.0.1:8082/v1/messages"
+
+
+# ---------------------------------------------------------------------------
+# call_llm_for_annotation
+# ---------------------------------------------------------------------------
+
+
+_ENV_ANTHROPIC = """LLM_DEFAULT_GROUP=1
+LLM_GROUP1_PROVIDER=anthropic
+LLM_GROUP1_BASE_URL=http://127.0.0.1:8082
+LLM_GROUP1_API_KEY=test-key
+LLM_GROUP1_MODEL_HAIKU=claude-haiku-4-5
+"""
+
+_ENV_OPENAI = """LLM_DEFAULT_GROUP=1
+LLM_GROUP1_PROVIDER=openai
+LLM_GROUP1_BASE_URL=https://api.openai.com
+LLM_GROUP1_API_KEY=sk-test
+LLM_GROUP1_MODEL_HAIKU=gpt-4o-mini
+"""
+
+
+class TestCallLLMForAnnotation:
+    @staticmethod
+    def _make_env(tmp_path, content):
+        env = tmp_path / ".env"
+        env.write_text(content)
+        return str(tmp_path)
+
+    def test_anthropic_happy_path(self, tmp_path):
+        root = self._make_env(tmp_path, _ENV_ANTHROPIC)
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "content": [{"type": "text", "text": "B cell"}, {"type": "text", "text": "T cell"}]
+        }
+        with patch("requests.post", return_value=mock_resp) as mock_post:
+            result = call_llm_for_annotation(
+                [{"role": "user", "content": "Annotate"}],
+                project_root=root,
+            )
+        assert result == "B cell\nT cell"
+        mock_post.assert_called_once()
+        # 验证 raise_for_status 被调用（issue #5 修复）
+        mock_resp.raise_for_status.assert_called_once()
+
+    def test_anthropic_error_raises(self, tmp_path):
+        root = self._make_env(tmp_path, _ENV_ANTHROPIC)
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = __import__("requests").exceptions.HTTPError("401 Unauthorized")
+        with patch("requests.post", return_value=mock_resp):
+            with pytest.raises(__import__("requests").exceptions.HTTPError, match="401"):
+                call_llm_for_annotation(
+                    [{"role": "user", "content": "Annotate"}],
+                    project_root=root,
+                )
+
+    def test_openai_happy_path(self, tmp_path):
+        root = self._make_env(tmp_path, _ENV_OPENAI)
+        mock_client = MagicMock()
+        mock_choice = MagicMock()
+        mock_choice.message.content = "B cell"
+        mock_client.chat.completions.create.return_value.choices = [mock_choice]
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = call_llm_for_annotation(
+                [{"role": "user", "content": "Annotate"}],
+                project_root=root,
+            )
+        assert result == "B cell"
+
+    def test_openai_error_propagates(self, tmp_path):
+        root = self._make_env(tmp_path, _ENV_OPENAI)
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = __import__("openai").APIError(
+            "Rate limit", request=None, body=None
+        )
+        with patch("openai.OpenAI", return_value=mock_client):
+            with pytest.raises(__import__("openai").APIError):
+                call_llm_for_annotation(
+                    [{"role": "user", "content": "Annotate"}],
+                    project_root=root,
+                )
+
+    def test_config_provider_overrides_model_provider_param(self, tmp_path):
+        """当 group 配置已指定 provider（anthropic）时，忽略 model_provider 参数（openai）。"""
+        root = self._make_env(tmp_path, _ENV_ANTHROPIC)
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"content": [{"type": "text", "text": "OK"}]}
+        with patch("requests.post", return_value=mock_resp):
+            result = call_llm_for_annotation(
+                [{"role": "user", "content": "Annotate"}],
+                model_provider="openai",  # fallback — config has "anthropic" so this is ignored
+                project_root=root,
+            )
+        assert result == "OK"
+
+
+# ---------------------------------------------------------------------------
+# build_mllmcelltype_config
+# ---------------------------------------------------------------------------
+
+
+class TestBuildMLLMCelltypeConfig:
+    @staticmethod
+    def _make_env(tmp_path, content):
+        env = tmp_path / ".env"
+        env.write_text(content)
+        return str(tmp_path)
+
+    def test_single_group_triple(self, tmp_path):
+        root = self._make_env(tmp_path, _ENV_ANTHROPIC)
+        api_keys, base_urls, model_list = build_mllmcelltype_config(project_root=root)
+        assert api_keys == {"anthropic": "test-key"}
+        assert base_urls == {"anthropic": "http://127.0.0.1:8082/v1/messages"}
+        assert model_list == ["claude-haiku-4-5"]
+
+    def test_multiple_groups(self, tmp_path):
+        env = tmp_path / ".env"
+        env.write_text(
+            "LLM_DEFAULT_GROUP=1\n"
+            "LLM_GROUP1_PROVIDER=anthropic\n"
+            "LLM_GROUP1_BASE_URL=http://127.0.0.1:8082\n"
+            "LLM_GROUP1_API_KEY=key1\n"
+            "LLM_GROUP1_MODEL_HAIKU=claude-haiku-4-5\n"
+            "LLM_GROUP2_PROVIDER=openai\n"
+            "LLM_GROUP2_BASE_URL=https://api.openai.com\n"
+            "LLM_GROUP2_API_KEY=key2\n"
+            "LLM_GROUP2_MODEL_HAIKU=gpt-4o-mini\n"
+        )
+        api_keys, base_urls, model_list = build_mllmcelltype_config(project_root=str(tmp_path))
+        assert api_keys == {"anthropic": "key1", "openai": "key2"}
+        assert len(base_urls) == 2
+        assert set(model_list) == {"claude-haiku-4-5", "gpt-4o-mini"}
+
+    def test_model_list_override_with_keys(self, tmp_path):
+        """Issue #6 修复：有 api_key 时 override 应被接受，不应误报 missing。"""
+        root = self._make_env(tmp_path, _ENV_ANTHROPIC)
+        api_keys, base_urls, model_list = build_mllmcelltype_config(
+            project_root=root,
+            model_list_override=["claude-opus-4-8", "gpt-4o"],
+        )
+        # api_keys 非空，override 应被完整接受
+        assert model_list == ["claude-opus-4-8", "gpt-4o"]
+        assert api_keys == {"anthropic": "test-key"}
+
+    def test_model_list_override_without_keys(self, tmp_path):
+        """Issue #6 修复：无 api_key 时 override 应全部报告 missing 并返回空列表。"""
+        env = tmp_path / ".env"
+        env.write_text(
+            "LLM_DEFAULT_GROUP=1\n"
+            "LLM_GROUP1_PROVIDER=anthropic\n"
+            "LLM_GROUP1_BASE_URL=http://127.0.0.1:8082\n"
+            "LLM_GROUP1_API_KEY=\n"  # 空 key
+            "LLM_GROUP1_MODEL_HAIKU=claude-haiku-4-5\n"
+        )
+        api_keys, base_urls, model_list = build_mllmcelltype_config(
+            project_root=str(tmp_path),
+            model_list_override=["claude-opus-4-8"],
+        )
+        # 空 api_key 不会被加入 api_keys → api_keys 为空 → override 全部 missing
+        assert model_list == []
+        # api_keys 应为空（key 为空字符串时不会加入）
+        assert api_keys == {}
+
+    def test_no_active_groups(self, tmp_path):
+        env = tmp_path / ".env"
+        env.write_text("LLM_DEFAULT_GROUP=1\n"
+                       "LLM_GROUP1_PROVIDER=\n"
+                       "LLM_GROUP1_BASE_URL=\n")
+        api_keys, base_urls, model_list = build_mllmcelltype_config(project_root=str(tmp_path))
+        assert api_keys == {}
+        assert base_urls == {}
+        assert model_list == []
+
+    def test_model_list_override_with_no_active_groups(self, tmp_path):
+        """Issue #6 修复：无活跃 group 时 override 应全部 missing。"""
+        env = tmp_path / ".env"
+        env.write_text("LLM_DEFAULT_GROUP=1\n"
+                       "LLM_GROUP1_PROVIDER=\n"
+                       "LLM_GROUP1_BASE_URL=\n")
+        api_keys, base_urls, model_list = build_mllmcelltype_config(
+            project_root=str(tmp_path),
+            model_list_override=["claude-opus-4-8"],
+        )
+        assert model_list == []

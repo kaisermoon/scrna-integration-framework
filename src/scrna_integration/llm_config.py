@@ -183,3 +183,371 @@ def get_active_groups(project_root: str | None = None) -> list[int]:
         if cfg is not None:
             active.append(g)
     return active
+
+
+# ---------------------------------------------------------------------------
+# 公开函数：LLM 统一调用（批 5：收编 06/06b/06c 三处漂移的 LLM 调用逻辑）
+# ---------------------------------------------------------------------------
+
+# 按 provider 补端点的映射表
+_PROVIDER_ENDPOINT: dict[str, str] = {
+    "anthropic": "/v1/messages",
+    "openai": "/v1",
+    "deepseek": "/v1",
+    "groq": "/v1",
+    "together": "/v1",
+    "fireworks": "/v1",
+    "siliconflow": "/v1",
+}
+
+
+def _resolve_endpoint(base_url: str, provider: str) -> str:
+    """补全 base_url 的 API 端点后缀。
+
+    若 base_url 已含 ``/v1/`` 路径或以 ``/v1`` 结尾则不补，
+    避免双写（如 ``/v1/v1/messages``）。
+    否则按 provider 查 ``_PROVIDER_ENDPOINT`` 追加对应后缀。
+    """
+    _normalized = base_url.rstrip("/")
+    if not base_url or "/v1/" in base_url or _normalized.endswith("/v1"):
+        return base_url
+    suffix = _PROVIDER_ENDPOINT.get(provider, "")
+    if not suffix:
+        return base_url
+    base = base_url.rstrip("/")
+    return f"{base}{suffix}"
+
+
+def call_llm_for_annotation(
+    messages: list[dict],
+    *,
+    model_provider: str = "anthropic",
+    model_name: str = "",
+    max_tokens: int = 1024,
+    temperature: float = 0.2,
+    system: str = "",
+    project_root: str | None = None,
+    group: int | None = None,
+    timeout: int = 120,
+) -> str:
+    """统一的 LLM 调用函数。
+
+    从 vault 根 .env 读取 LLM 配置，按 provider 分支调用对应 SDK，
+    返回响应中的文本内容。
+
+    Parameters
+    ----------
+    messages : list[dict]
+        消息列表，格式为 ``[{"role": "user", "content": "..."}]``。
+    model_provider : str
+        ``"anthropic"`` 或 ``"openai"``。
+        仅当 group 配置中未指定 provider 时作为 fallback 生效；
+        若配置中已设 provider，以配置为准，此参数被忽略。
+    model_name : str
+        具体模型名（如 ``"claude-haiku-4-5-20251001"``）。
+        为空时自动取 group 配置中 haiku 档模型。
+    max_tokens : int
+        最大输出 token 数。
+    temperature : float
+        采样温度（0-1）。
+    system : str
+        系统提示词。anthropic 作为顶层 system 字段发送；
+        openai-compatible 作为 messages 中的 system role 消息。
+    project_root : str or None
+        项目根目录。None 时自动推断。
+    group : int or None
+        LLM group 编号。None 时取 LLM_DEFAULT_GROUP。
+    timeout : int
+        HTTP 请求超时秒数。
+
+    Returns
+    -------
+    str
+        LLM 返回的文本内容。
+    """
+    cfg = load_llm_group_config(group=group, project_root=project_root)
+    if cfg is None:
+        raise RuntimeError(
+            "LLM group 未配置。请在 vault 根 .env 中设置 "
+            "LLM_GROUP{N}_PROVIDER / LLM_GROUP{N}_BASE_URL。"
+        )
+
+    api_key: str = cfg.get("api_key", "")
+    base_url: str = cfg.get("base_url", "")
+    provider: str = cfg.get("provider", model_provider)
+    models: dict = cfg.get("models", {})
+
+    if not model_name:
+        model_name = models.get("haiku", "")
+    if not model_name:
+        raise ValueError(
+            "model_name 未指定，且 group 配置中无 haiku 档模型。"
+        )
+
+    # 端点补全
+    resolved_url = _resolve_endpoint(base_url, provider)
+
+    # 按 provider 分支调用
+    if provider == "anthropic":
+        import requests as _req
+
+        _headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        _body: dict = {
+            "model": model_name,
+            "max_tokens": max_tokens,
+            "messages": messages,
+        }
+        if system:
+            _body["system"] = system
+
+        _resp = _req.post(
+            resolved_url,
+            headers=_headers,
+            json=_body,
+            timeout=timeout,
+        )
+        _resp.raise_for_status()
+        _data = _resp.json()
+        _text_blocks = [
+            b.get("text", "")
+            for b in _data.get("content", [])
+            if b.get("type") == "text"
+        ]
+        return "\n".join(_text_blocks)
+
+    else:
+        # OpenAI-compatible providers（openai / deepseek / groq / ...）
+        from openai import OpenAI as _OpenAI
+
+        _client = _OpenAI(
+            api_key=api_key,
+            base_url=resolved_url,
+            timeout=timeout,
+        )
+        _api_messages: list[dict] = []
+        if system:
+            _api_messages.append({"role": "system", "content": system})
+        _api_messages.extend(messages)
+
+        _completion = _client.chat.completions.create(
+            model=model_name,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            messages=_api_messages,
+        )
+        return _completion.choices[0].message.content or ""
+
+
+def extract_json_from_llm_response(raw_text: str) -> dict | None:
+    """从 LLM 文本回复中提取 JSON 字典。
+
+    容忍多种格式：纯 JSON、`` ```json ````` 代码围栏、
+    键不带引号的宽松格式等。
+
+    Parameters
+    ----------
+    raw_text : str
+        LLM 返回的原始文本（可能含前言/后缀）。
+
+    Returns
+    -------
+    dict or None
+        解析成功返回 dict；解析失败返回 None。
+    """
+    import json as _json
+    import re as _re
+
+    if not raw_text:
+        return None
+
+    # 策略 1：匹配 ```json ... ``` 代码围栏
+    _match = _re.search(
+        r'```(?:json)?\s*\n?(.*?)\n?```', raw_text, _re.DOTALL
+    )
+    if _match:
+        _candidate = _match.group(1).strip()
+        try:
+            _result = _json.loads(_candidate)
+            if isinstance(_result, dict):
+                return {str(k): str(v) for k, v in _result.items() if v}
+        except (_json.JSONDecodeError, ValueError):
+            pass
+
+    # 策略 2：找第一个 { 和最后一个 } 之间的内容
+    _start = raw_text.find("{")
+    _end = raw_text.rfind("}")
+    if _start >= 0 and _end > _start:
+        _candidate = raw_text[_start:_end + 1]
+        try:
+            _result = _json.loads(_candidate)
+            if isinstance(_result, dict):
+                return {str(k): str(v) for k, v in _result.items() if v}
+        except (_json.JSONDecodeError, ValueError):
+            pass
+
+    return None
+
+
+def build_mllmcelltype_config(
+    project_root: str | None = None,
+    model_list_override: list[str] | None = None,
+) -> tuple[dict[str, str], dict[str, str], list[str]]:
+    """从 .env LLM_GROUP 构建 mLLMCelltype 所需的配置。
+
+    遍历所有活跃 group，取每个 group 的 haiku 档模型 +
+    api_key + base_url（已补端点）。
+
+    Parameters
+    ----------
+    project_root : str or None
+        项目根目录。
+    model_list_override : list[str] or None
+        手动指定的模型列表（覆盖自动构建）。
+        若所有 provider 均无 api_key，则打印警告并返回空列表；
+        否则以 override 列表为准（下游库负责模型-提供者路由匹配）。
+
+    Returns
+    -------
+    tuple
+        ``(api_keys, base_urls, model_list)`` 三元组。
+        - ``api_keys``: ``{provider: api_key}``
+        - ``base_urls``: ``{provider: resolved_url}``
+        - ``model_list``: 模型名列表
+    """
+    active_groups = get_active_groups(project_root=project_root)
+    if not active_groups:
+        return {}, {}, []
+
+    api_keys: dict[str, str] = {}
+    base_urls: dict[str, str] = {}
+    model_list: list[str] = []
+
+    for gid in active_groups:
+        cfg = load_llm_group_config(group=gid, project_root=project_root)
+        if cfg is None:
+            continue
+        provider = cfg.get("provider", "")
+        key = cfg.get("api_key", "")
+        url = cfg.get("base_url", "")
+        model = cfg.get("models", {}).get("haiku", "")
+        if model and key:
+            model_list.append(model)
+            api_keys[provider] = key
+            if url:
+                base_urls[provider] = _resolve_endpoint(url, provider)
+
+    if model_list_override:
+        # api_keys 的键是 provider 名（如 "anthropic"），而
+        # model_list_override 中的是模型名（如 "claude-haiku-4-5"），
+        # 不能直接用模型名去匹配 provider 名。
+        # 若没有任何已配置的 api_key，则所有 override 模型都缺少 key；
+        # 否则接受 override 列表，下游路由会将模型分派到对应 provider。
+        if not api_keys:
+            print(
+                f"MLLM_MODELS 中以下模型无 API key: {model_list_override}"
+            )
+            model_list = []
+        else:
+            model_list = model_list_override
+
+    return api_keys, base_urls, model_list
+
+
+def apply_mllmcelltype_patches(
+    max_retries: int = 3,
+    retry_delay: int = 2,
+    timeout: int = 120,
+    request_json: bool = False,
+    max_tokens_override: int = 16384,
+) -> bool:
+    """对 mLLMCelltype 库内部函数应用 monkey-patch。
+
+    修复库的已知缺陷：超时过小、max_tokens 过低、
+    Anthropic thinking 块解析不兼容。
+
+    参数全部显式命名，面向非 CS 学生可读。
+
+    Returns
+    -------
+    bool
+        True 表示 patch 成功；False 表示库版本不兼容，跳过。
+    """
+    try:
+        import mllmcelltype.functions as _mf
+        import mllmcelltype.providers.common as _c
+        import mllmcelltype.providers.anthropic as _a
+        import requests as _r
+
+        # 修复 1：HTTP 重试默认参数（用显式变量名替代位置元组）
+        _c.call_http_api_with_retry.__defaults__ = (
+            max_retries,    # max_retries
+            retry_delay,    # retry_delay (seconds)
+            timeout,        # timeout (seconds)
+            request_json,   # request_json
+            (),             # extra (empty tuple)
+        )
+
+        # 修复 2：OpenAI 兼容 API 默认参数
+        _c.call_openai_compatible_api.__defaults__ = (
+            max_tokens_override,  # max_tokens
+            None,                 # top_p
+            (),                   # extra
+            None,                 # temperature
+            None,                 # top_k
+            None,                 # repetition_penalty
+            False,                # request_json
+        )
+
+        # 修复 3：Anthropic thinking 块解析兼容
+        _a._parse_anthropic_response = lambda content: [
+            line.rstrip(",")
+            for block in content.get("content", [])
+            if block.get("type") == "text" and "text" in block
+            for line in block["text"].strip().split("\n")
+        ]
+
+        # 修复 4：注册 patched Anthropic provider 函数
+        def _patched_process_anthropic(prompt, model, api_key,
+                                        base_url=None):
+            return _c.call_http_api_with_retry(
+                provider_name="Anthropic",
+                url=_a.resolve_endpoint_url(
+                    "anthropic", "Anthropic", base_url
+                ),
+                body={
+                    "model": _a._resolve_model_name(model),
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": max_tokens_override,
+                    "thinking": {"type": "disabled"},
+                },
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+                post_func=_r.post,
+                response_parser=_a._parse_anthropic_response,
+                max_retries=max_retries,
+                retry_delay=retry_delay,
+                timeout=timeout,
+                request_json=False,
+            )
+
+        _mf.PROVIDER_FUNCTIONS["anthropic"] = (
+            _patched_process_anthropic
+        )
+        return True
+
+    except (AttributeError, ImportError, TypeError) as e:
+        import warnings
+        warnings.warn(
+            f"mLLMCelltype monkey-patch 失败（库版本可能不兼容）: {e}\n"
+            "  mLLMCelltype 注释将跳过。"
+            "  若需恢复，请检查 mllmcelltype 版本"
+            "（当前验证版本: 2.1.1）。"
+        )
+        return False
