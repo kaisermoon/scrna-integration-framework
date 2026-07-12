@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
-"""Pipeline test runner: Execute each notebook, capture cell-level pass/fail, timing, errors."""
+"""冒烟运行器：依次 nbconvert --execute 主线（01→06）与全部下游（D01→D14）notebook，
+逐 cell 记录 pass/fail、耗时与报错，产出 JSON 汇总。
 
-import shutil, subprocess, json, os, sys, time, re
+这不是 pytest 用例（不被 tests/ 收集），是端到端手动冒烟脚本，用于验证
+notebook 之间的 h5ad 输入输出契约不断裂。命令行直接运行：
+
+    python scripts/smoke_run_notebooks.py
+
+执行产物（各 notebook 的已执行副本 + 汇总 JSON）写入系统临时目录下的
+smoke_run_notebooks_outputs/，不污染仓库。
+"""
+
+import shutil, subprocess, json, os, sys, time, re, tempfile
 from pathlib import Path
 from datetime import datetime
 
@@ -12,6 +22,9 @@ os.makedirs("results/tables", exist_ok=True)
 
 PYTHON = sys.executable
 JUPYTER = shutil.which("jupyter") or "jupyter"
+
+# 执行产物输出目录：用系统临时目录（跨平台）而非硬编码 /tmp
+OUTPUT_DIR = os.path.join(tempfile.gettempdir(), "smoke_run_notebooks_outputs")
 
 # Notebook list in execution order
 NOTEBOOKS = [
@@ -28,22 +41,23 @@ NOTEBOOKS = [
     ("06_annotated", "notebooks/06_annotated.ipynb", "results/06_annotated_v1.h5ad"),
 ]
 
-# Downstream notebooks
+# Downstream notebooks（D 前缀命名：目录内各模块彼此无执行先后，均以
+# 06_annotated.h5ad 为输入、可单独运行，D 编号仅为清单序位不表示顺序）
 DOWNSTREAM = [
-    ("07_deg", "notebooks/07_downstream/07_deg.ipynb", ""),
-    ("08_pseudobulk_deg", "notebooks/07_downstream/08_pseudobulk_deg.ipynb", ""),
-    ("09_cnv", "notebooks/07_downstream/09_cnv.ipynb", ""),
-    ("10_pseudotime", "notebooks/07_downstream/10_pseudotime.ipynb", ""),
-    ("10b_pseudotime_monocle3", "notebooks/07_downstream/10b_pseudotime_monocle3.ipynb", ""),
-    ("10c_pseudotime_cellrank2", "notebooks/07_downstream/10c_pseudotime_cellrank2.ipynb", ""),
-    ("10d_pseudotime_cytotrace2", "notebooks/07_downstream/10d_pseudotime_cytotrace2.ipynb", ""),
-    ("10e_pseudotime_compare", "notebooks/07_downstream/10e_pseudotime_compare.ipynb", ""),
-    ("11_abundance", "notebooks/07_downstream/11_abundance.ipynb", ""),
-    ("12_pathway", "notebooks/07_downstream/12_pathway.ipynb", ""),
-    ("13_grn", "notebooks/07_downstream/13_grn.ipynb", ""),
-    ("14_cell_communication", "notebooks/07_downstream/14_cell_communication.ipynb", ""),
-    ("15_gene_modules", "notebooks/07_downstream/15_gene_modules.ipynb", ""),
-    ("16_trajectory_de", "notebooks/07_downstream/16_trajectory_de.ipynb", ""),
+    ("D01_deg", "notebooks/07_downstream/D01_deg.ipynb", ""),
+    ("D02_pseudobulk_deg", "notebooks/07_downstream/D02_pseudobulk_deg.ipynb", ""),
+    ("D03_cnv", "notebooks/07_downstream/D03_cnv.ipynb", ""),
+    ("D04_pseudotime", "notebooks/07_downstream/D04_pseudotime.ipynb", ""),
+    ("D05_pseudotime_monocle3", "notebooks/07_downstream/D05_pseudotime_monocle3.ipynb", ""),
+    ("D06_pseudotime_cellrank2", "notebooks/07_downstream/D06_pseudotime_cellrank2.ipynb", ""),
+    ("D07_potency_cytotrace2", "notebooks/07_downstream/D07_potency_cytotrace2.ipynb", ""),
+    ("D08_pseudotime_compare", "notebooks/07_downstream/D08_pseudotime_compare.ipynb", ""),
+    ("D09_abundance", "notebooks/07_downstream/D09_abundance.ipynb", ""),
+    ("D10_pathway", "notebooks/07_downstream/D10_pathway.ipynb", ""),
+    ("D11_grn", "notebooks/07_downstream/D11_grn.ipynb", ""),
+    ("D12_cell_communication", "notebooks/07_downstream/D12_cell_communication.ipynb", ""),
+    ("D13_gene_modules", "notebooks/07_downstream/D13_gene_modules.ipynb", ""),
+    ("D14_trajectory_de", "notebooks/07_downstream/D14_trajectory_de.ipynb", ""),
 ]
 
 
@@ -102,7 +116,7 @@ def run_notebook(name, rel_path, output_check):
             [JUPYTER, "nbconvert",
              "--execute", "--to", "notebook",
              "--output", os.path.basename(exec_path),
-             "--output-dir", "/tmp/pipeline_test_outputs",
+             "--output-dir", OUTPUT_DIR,
              "--allow-errors",
              "--ExecutePreprocessor.timeout=3600",
              nb_path],
@@ -119,9 +133,9 @@ def run_notebook(name, rel_path, output_check):
     elapsed = time.time() - t_start
 
     # Check if executed notebook was produced
-    os.makedirs("/tmp/pipeline_test_outputs", exist_ok=True)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
     nb_name = os.path.basename(nb_path).replace('.ipynb', f'_exec_{name}.ipynb')
-    exec_out = os.path.join("/tmp/pipeline_test_outputs", nb_name)
+    exec_out = os.path.join(OUTPUT_DIR, nb_name)
 
     cells = []
     notebook_status = "ERROR"
@@ -169,10 +183,10 @@ def run_notebook(name, rel_path, output_check):
 
 
 def main():
-    os.makedirs("/tmp/pipeline_test_outputs", exist_ok=True)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     # Clean stale executed notebooks from previous runs
-    out_dir = "/tmp/pipeline_test_outputs"
+    out_dir = OUTPUT_DIR
     for f in os.listdir(out_dir):
         if f.endswith("_executed.ipynb") or f.endswith("_exec.ipynb") or "_exec_" in f:
             os.remove(os.path.join(out_dir, f))
@@ -223,7 +237,7 @@ def main():
         summary["results"].append(entry)
 
     # Write summary JSON
-    summary_path = "/tmp/pipeline_test_outputs/pipeline_test_summary.json"
+    summary_path = os.path.join(OUTPUT_DIR, "smoke_run_summary.json")
     with open(summary_path, 'w') as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
 

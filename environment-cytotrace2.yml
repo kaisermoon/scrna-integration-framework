@@ -6,7 +6,7 @@
 #   中的 scCRAFT/jax 要求 numpy>=2.0。两者 numpy 需求互斥，必须分离到不同环境。
 #
 # 何时使用：
-#   仅 notebooks/07_downstream/10d_pseudotime_cytotrace2.ipynb 需要。
+#   仅 notebooks/07_downstream/D07_potency_cytotrace2.ipynb 需要。
 #   使用前 conda activate scrna-cytotrace2，或在 Jupyter 中切换 kernel。
 #
 # 安装：

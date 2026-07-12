@@ -58,12 +58,12 @@ TF 2.21.0 的 oneDNN/MKL runtime 与 PyTorch 2.12.0 的 MKL 在 backward pass �
 
 ### scCODA 独立环境 `scrna-sccoda`
 
-scCODA（11_abundance 丰度分析）依赖 TF，与主环境隔离到独立 conda 环境 `scrna-sccoda`。
+scCODA（D09_abundance 丰度分析）依赖 TF，与主环境隔离到独立 conda 环境 `scrna-sccoda`。
 
 | 环境 | 用途 | 关键依赖 | 环境 spec |
 |------|------|---------|-----------|
 | `scrna-integration` | 主流水线（01-10，含 scVI/scANVI/scCRAFT） | PyTorch, scvi-tools, scanpy, rpy2 | `environment.yml` |
-| `scrna-sccoda` | 11_abundance scCODA 丰度分析 | TensorFlow, scCODA | `environment-sccoda.yml`（两平台，2026-06-15 跨平台改造） |
+| `scrna-sccoda` | D09_abundance scCODA 丰度分析 | TensorFlow, scCODA | `environment-sccoda.yml`（两平台，2026-06-15 跨平台改造） |
 
 > **跨平台改造（2026-06-15）**：`environment-sccoda.yml` 已剔除 linux 专属底层包，精简为 4 个 conda 功能包（python/pip/r-base/rpy2）+ 76 个 pip 包，与主 `environment.yml` 同风格。两平台均可直接 `conda env create -f environment-sccoda.yml`。
 > **channels 说明（2026-06-17）**：channels 含 `conda-forge` + `bioconda`。两 channel 在 osx-arm64 上 R 包覆盖度不如 linux-64，但 sccoda 环境仅需 `r-base` + `rpy2`（均来自 conda-forge），bioconda 为预留（未来若需 Bioconductor R 包）。当前在两平台可正常求解。
@@ -100,7 +100,7 @@ cytotrace2-py（10d 拟时序）要求 `numpy<2.0.0`，而 scCRAFT（04 嵌入�
 ### pyscenic numpy 兼容性（monkey-patch，2026-06-16 登记）
 
 pyscenic 0.12.1 的 `transform.py:42-44` 使用 `np.object` 别名（numpy>=1.24 已移除）。
-修复方式：在 `13_grn.ipynb` 的 pyscenic 导入前执行 `np.object = object` monkey-patch，
+修复方式：在 `D11_grn.ipynb` 的 pyscenic 导入前执行 `np.object = object` monkey-patch，
 不改动 pyscenic 源码（保护两平台兼容性）。不影响原 Mac 环境。
 
 ---

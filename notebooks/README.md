@@ -22,25 +22,31 @@ scRNA-seq 整合分析框架的完整分析流水线，按数字编号顺序执�
 
 ## 下游分析（07_downstream/）
 
+下游模块采用 `D` 前缀命名，彼此无执行先后依赖，均以 `06_annotated.h5ad` 为输入、可单独运行。`D` 编号仅为清单序位，不表示执行顺序。目录内导览见 `07_downstream/README.md`。
+
 | 编号 | Notebook | 功能 |
 |------|----------|------|
-| 07 | `07_deg.ipynb` | Per-cluster 差异表达基因 |
-| 08 | `08_pseudobulk_deg.ipynb` | Pseudobulk DEG (DESeq2) |
-| 09 | `09_cnv.ipynb` | 拷贝数变异推断 |
-| 10 | `10_pseudotime.ipynb` | 轨迹分析 (DPT/Monocle3) |
-| 11 | `11_abundance.ipynb` | 细胞类型丰度比较 |
-| 12 | `12_pathway.ipynb` | 通路富集分析 |
-| 13 | `13_grn.ipynb` | 基因调控网络 |
-| 14 | `14_cell_communication.ipynb` | 细胞通讯 |
-| 15 | `15_gene_modules.ipynb` | 基因共表达模块 |
-| 16 | `16_trajectory_de.ipynb` | Trajectory-关联 DEG (GAM) |
+| D01 | `D01_deg.ipynb` | Per-cluster 差异表达基因 |
+| D02 | `D02_pseudobulk_deg.ipynb` | Pseudobulk DEG (DESeq2) |
+| D03 | `D03_cnv.ipynb` | 拷贝数变异推断 |
+| D04 | `D04_pseudotime.ipynb` | 轨迹分析（熵 + CytoTRACE + Monocle3） |
+| D05 | `D05_pseudotime_monocle3.ipynb` | 拟时序（Monocle3 独立版） |
+| D06 | `D06_pseudotime_cellrank2.ipynb` | 拟时序（CellRank2 命运图谱） |
+| D07 | `D07_potency_cytotrace2.ipynb` | 分化潜能打分（CytoTRACE2） |
+| D08 | `D08_pseudotime_compare.ipynb` | 拟时序/潜能方法横向比较 |
+| D09 | `D09_abundance.ipynb` | 细胞类型丰度比较 |
+| D10 | `D10_pathway.ipynb` | 通路富集分析 |
+| D11 | `D11_grn.ipynb` | 基因调控网络 |
+| D12 | `D12_cell_communication.ipynb` | 细胞通讯 |
+| D13 | `D13_gene_modules.ipynb` | 基因共表达模块 |
+| D14 | `D14_trajectory_de.ipynb` | Trajectory-关联 DEG (GAM) |
 
 ## 典型工作流
 
 ```
-全局分析:  01(x5) -> 02 -> 03 -> 04 -> 05 -> 06 -> 06b -> 07-16
+全局分析:  01(x5) -> 02 -> 03 -> 04 -> 05 -> 06 -> 06b -> D01-D14(按需)
 
-上皮精细分析:  06 -> 06c(epithelial subset) -> 06b(subset mode) -> 10 -> 16
+上皮精细分析:  06 -> 06c(epithelial subset) -> 06b(subset mode) -> D04 -> D14
 
 回退重跑:  发现 04 过校正 -> 改 04 PARAMS -> 重跑 05 -> 06 -> ...
           (用 scripts/trace_downstream.py 查看影响链)
