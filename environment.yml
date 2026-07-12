@@ -263,7 +263,7 @@ dependencies:
       - zarr==3.1.6
       - zict==3.0.0
       # === 可选依赖（未默认启用，notebook 在包/权重未就绪时优雅跳过）===
-      # CytoTRACE2（细胞分化潜能 DL 方法，10d_pseudotime_cytotrace2.ipynb）
+      # CytoTRACE2（细胞分化潜能 DL 方法，07_downstream/D07_potency_cytotrace2.ipynb）
       # 已隔离至独立环境 scrna-cytotrace2（numpy<2.0 vs scCRAFT/jax>=2.0 冲突）。
       # 安装：conda env create -f environment-cytotrace2.yml
       # 详见 docs/cross-platform-exceptions.md
@@ -272,7 +272,7 @@ dependencies:
       #   git clone https://github.com/ch2343/scCRAFT && cd scCRAFT && pip install .
       #   pip uninstall -y tensorflow tensorflow-probability keras
       #   原因：TF 的 oneDNN/MKL 与 PyTorch backward 在同进程冲突会 segfault
-      # scCODA（丰度分析，11_abundance）：已移至独立环境，见 environment-sccoda.yml
+      # scCODA（丰度分析，07_downstream/D09_abundance）：已移至独立环境，见 environment-sccoda.yml
       #   原因：scCODA 依赖 TF，与主环境的 scCRAFT/PyTorch 不能共存
       # 重建主环境后用 scripts/env_parity.py snapshot 刷新快照，
       # 用 python -c "from scrna_integration.platform import env_check; env_check()" 自检

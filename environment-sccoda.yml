@@ -7,7 +7,7 @@
 #   同进程 backward 时存在冲突，两者必须分离到不同环境。
 #
 # 何时使用：
-#   仅 notebooks/11_abundance.ipynb 中 scCODA 细胞丰度差异分析部分需要。
+#   仅 notebooks/07_downstream/D09_abundance.ipynb 中 scCODA 细胞丰度差异分析部分需要。
 #   使用前 `conda activate scrna-sccoda`，或在 Jupyter 中切换到对应 kernel。
 #
 # 安装：

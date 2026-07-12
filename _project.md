@@ -45,19 +45,33 @@ repo:
 - **大数据存放**：原始数据放 `data/raw/`（gitignore）；分析对象放 `results/data/`（gitignore）
 - **早期框架参考**：`/Users/zhongzishao/Works/GCPL_scRNA/`（已部分复制到 `references/legacy-GCPL/`）
 
-## 子模块（计划中）
+## 结构现状
 
-| 模块 | 目录 | 状态 |
+代码组织遵循「src 与 notebook 边界铁律」（见项目级 `CLAUDE.md`）：`src/scrna_integration/` 只收无科研价值的技术管道，一切分析逻辑留 notebook cell。
+
+### src 技术管道模块
+
+| 模块 | 文件 | 职责 |
 |------|------|------|
-| 数据接入与标准化 | `src/io/` + `notebooks/01_*` | 待启动 |
-| 预处理与质控 | `src/qc/` + `notebooks/02_*` | 待启动 |
-| 标准化 / HVG | `src/preprocessing/` + `notebooks/03_*` | 待启动 |
-| 降维与去批次（多方法并存） | `src/embedding/` + `notebooks/04_*` | 待启动 |
-| 聚类（参数扫描） | `src/clustering/` + `notebooks/05_*` | 待启动 |
-| 注释（多方法交叉） | `src/annotation/` + `notebooks/06_*` | 待启动 |
-| 差异基因 / 通路 / 基因集评分 | `src/downstream/dge/` + `notebooks/07_*` | 待启动 |
-| 拟时序 | `src/downstream/pseudotime/` | 待启动 |
-| GRN | `src/downstream/grn/` | 待启动 |
+| 启动脚手架 | `src/scrna_integration/bootstrap.py` | 定位项目根 + BLAS 线程设置，notebook 顶部一行调用 |
+| 平台检测收口 | `src/scrna_integration/platform.py` | OS / CUDA / Rscript 路径检测，`detect_device()` 设备选择单点收口（ADR-0013） |
+| LLM 配置与调用 | `src/scrna_integration/llm_config.py` | 06 系列注释的多模型直连配置与标准调用 |
+| 多格式读取 | `src/scrna_integration/io.py` | 多源接入与 rds 跨语言 R 桥接（分析逻辑逐步拆回 notebook，见 `docs/优化方案-20260710.md`） |
+| 评分指标 | `src/scrna_integration/scorers.py` | QC / 聚类 / 整合 / 注释一致性纯函数（逐步拆回 notebook） |
+| marker 加载 | `src/scrna_integration/markers.py` | `load_markers` groupby/filter（逐步拆回 notebook） |
+
+### notebooks 分析流水线
+
+| 阶段 | notebook | 说明 |
+|------|----------|------|
+| 前置 | `notebooks/00_propose_obs_manifest.ipynb` | obs 映射清单辅助生成 |
+| 每来源接入 + QC | `notebooks/01_per_dataset/`（`01_template_10x` 骨架 + `01_kim`/`01_nancang`/`01_nowicki`/`01_yue`） | 每来源一个 notebook，字段映射/QC/断言在 cell |
+| 合并 | `notebooks/02_merged.ipynb` | concat + 合并质控 |
+| 归一化 / HVG | `notebooks/03_normalized.ipynb` | 归一化状态判定 + HVG |
+| 降维去批次 | `notebooks/04_embedded.ipynb` | PCA/Harmony/scVI/scANVI 多方法并存比较 |
+| 聚类 | `notebooks/05_clustered.ipynb` | 多分辨率 Leiden + 多指标推荐 |
+| 注释 | `notebooks/06_annotated.ipynb` + `06b_per_cluster` + `06c_subset` | 多方法交叉比对 + LLM 判决 |
+| 下游 | `notebooks/07_downstream/`（`D01`–`D14`） | 各模块以 `06_annotated.h5ad` 为输入、彼此无执行先后、可单独运行 |
 
 ## 数据集（已收集，部分）
 

@@ -42,7 +42,7 @@ pip uninstall -y tensorflow tensorflow-probability keras 2>/dev/null || true
 - **scCRAFT**：当前安装版 `SCIntegrationModel.__init__` 中 `self.device = 'cpu'` 硬编码（CUDA 行被注释），`train_integration_model()` 不接收 device 参数。**所有平台恒走 CPU，Mac MPS 不可达**。
 - 详见 ADR-0013。
 
-### 3. scCODA 独立环境（如需用 11_abundance 的 scCODA）
+### 3. scCODA 独立环境（如需用 D09_abundance 的 scCODA）
 
 Linux 上已建 `scrna-sccoda` 环境。Mac 上需重新创建（`environment-sccoda.yml` 当前是 linux-64 专属，pin 了 linux 底层库）：
 
