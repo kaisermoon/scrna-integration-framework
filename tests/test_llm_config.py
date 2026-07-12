@@ -548,3 +548,45 @@ class TestBuildMLLMCelltypeConfig:
             model_list_override=["claude-opus-4-8"],
         )
         assert model_list == []
+
+    def test_b7_multi_tier_single_group_all_three(self, tmp_path):
+        """B7 行为变更：单个 group 配满 haiku + sonnet + opus → model_list 含 3 个模型。
+
+        这验证 build_mllmcelltype_config 从"每 group 取 haiku 单模型"
+        改为"取每个 group 所有已配置档位"的新行为。
+        """
+        env = tmp_path / ".env"
+        env.write_text(
+            "LLM_DEFAULT_GROUP=1\n"
+            "LLM_GROUP1_PROVIDER=anthropic\n"
+            "LLM_GROUP1_BASE_URL=http://127.0.0.1:8082\n"
+            "LLM_GROUP1_API_KEY=test-key\n"
+            "LLM_GROUP1_MODEL_HAIKU=claude-haiku-4-5\n"
+            "LLM_GROUP1_MODEL_SONNET=claude-sonnet-4-6\n"
+            "LLM_GROUP1_MODEL_OPUS=claude-opus-4-8\n"
+        )
+        api_keys, base_urls, model_list = build_mllmcelltype_config(
+            project_root=str(tmp_path),
+        )
+        assert len(model_list) == 3
+        assert model_list == [
+            "claude-haiku-4-5",
+            "claude-sonnet-4-6",
+            "claude-opus-4-8",
+        ]
+        assert api_keys == {"anthropic": "test-key"}
+        assert "anthropic" in base_urls
+
+    def test_b7_multi_tier_single_group_haiku_only(self, tmp_path):
+        """B7 行为变更：单 group 只配 haiku → model_list 仅含 1 个模型（兼容旧行为）。
+
+        确保没有 sonnet/opus 时不会引入空字符串或假模型名。
+        """
+        root = self._make_env(tmp_path, _ENV_ANTHROPIC)
+        api_keys, base_urls, model_list = build_mllmcelltype_config(
+            project_root=root,
+        )
+        assert len(model_list) == 1
+        assert model_list == ["claude-haiku-4-5"]
+        assert api_keys == {"anthropic": "test-key"}
+        assert "anthropic" in base_urls
