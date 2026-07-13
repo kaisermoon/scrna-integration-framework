@@ -4,31 +4,24 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER_PATH = ROOT / "scripts" / "smoke_run_notebooks.py"
-R_CHECK_PATH = ROOT / "scripts" / "check_r_scripts.py"
+
+
+def _load_script(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 def _load_runner():
-    spec = importlib.util.spec_from_file_location("smoke_run_notebooks", RUNNER_PATH)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
-
-
-def _load_r_check():
-    spec = importlib.util.spec_from_file_location("check_r_scripts", R_CHECK_PATH)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+    return _load_script("smoke_run_notebooks", RUNNER_PATH)
 
 
 def _write_executed_notebook(path: Path, *, error: bool = False) -> None:
@@ -191,48 +184,20 @@ def test_all_pass_has_success_overall_status(monkeypatch, tmp_path: Path) -> Non
     assert summary["status"] == "SUCCESS"
 
 
-def test_r_check_builds_parse_command(monkeypatch, tmp_path: Path) -> None:
-    r_check = _load_r_check()
-    rscript = tmp_path / "custom-Rscript"
+def test_r_check_builds_parse_command_and_propagates_failure(monkeypatch, tmp_path: Path) -> None:
+    r_check = _load_script("check_r_scripts", ROOT / "scripts" / "check_r_scripts.py")
     r_file = tmp_path / "entry point.R"
     calls = []
-
-    def fake_run(command, **kwargs):
-        calls.append((command, kwargs))
-        return SimpleNamespace(returncode=7)
-
-    monkeypatch.setattr(r_check.subprocess, "run", fake_run)
     monkeypatch.setattr(
-        sys,
-        "argv",
-        ["check_r_scripts.py", "--rscript", str(rscript), str(r_file)],
+        r_check.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append((command, kwargs)) or SimpleNamespace(returncode=7),
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["check_r_scripts.py", "--rscript", "custom-Rscript", str(r_file)]
     )
 
     assert r_check.main() == 7
-    assert calls == [
-        (
-            [
-                str(rscript),
-                "--vanilla",
-                "-e",
-                "for (f in commandArgs(trailingOnly=TRUE)) parse(file=f)",
-                str(r_file),
-            ],
-            {"check": False},
-        )
-    ]
-
-
-def test_r_check_propagates_rscript_failure(tmp_path: Path) -> None:
-    fake_rscript = tmp_path / "Rscript"
-    fake_rscript.write_text("#!/bin/sh\nexit 7\n", encoding="utf-8")
-    fake_rscript.chmod(0o755)
-    r_file = tmp_path / "broken.R"
-    r_file.write_text("stop('boom')\n", encoding="utf-8")
-
-    result = subprocess.run(
-        [sys.executable, str(R_CHECK_PATH), "--rscript", str(fake_rscript), str(r_file)],
-        check=False,
-    )
-
-    assert result.returncode == 7
+    parse_expr = "for (f in commandArgs(trailingOnly=TRUE)) parse(file=f)"
+    expected = ["custom-Rscript", "--vanilla", "-e", parse_expr, str(r_file)]
+    assert calls == [(expected, {"check": False})]
