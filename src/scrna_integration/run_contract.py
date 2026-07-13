@@ -20,17 +20,9 @@ from typing import Any
 
 _REDACTED = "<redacted>"
 _SENSITIVE_PARAMETER_TOKENS = {"TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "CREDENTIALS"}
-_RESEARCH_KEY_ALLOWLIST = {
-    "BATCH_KEY",
-    "CELL_TYPE_KEY",
-    "CLUSTER_KEY",
-    "DISEASE_KEY",
-    "DONOR_KEY",
-    "GROUP_KEY",
-    "HVG_KEY",
-    "LABEL_KEY",
-    "SAMPLE_KEY",
-}
+_RESEARCH_KEY_ALLOWLIST = frozenset(
+    "BATCH_KEY CELL_TYPE_KEY CLUSTER_KEY DISEASE_KEY DONOR_KEY GROUP_KEY HVG_KEY LABEL_KEY SAMPLE_KEY".split()
+)
 
 
 def _is_sensitive_parameter_name(name: str) -> bool:
@@ -142,14 +134,26 @@ def collect_runtime_provenance(
             capture_output=True,
             timeout=10,
         ).stdout
+        git_status = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain=v1", "--untracked-files=all", "-z"],
+            check=True,
+            capture_output=True,
+            timeout=10,
+        ).stdout
         git_available = True
-        git_dirty: bool | None = bool(git_diff)
-        git_diff_sha256 = hashlib.sha256(git_diff).hexdigest() if git_diff else None
+        git_dirty: bool | None = bool(git_status)
+        git_status_sha256 = hashlib.sha256(git_status).hexdigest() if git_status else None
+        git_untracked_count = sum(record.startswith(b"?? ") for record in git_status.split(b"\0"))
+        git_tracked_dirty: bool | None = bool(git_diff)
+        git_tracked_diff_sha256 = hashlib.sha256(git_diff).hexdigest() if git_diff else None
     except (FileNotFoundError, subprocess.SubprocessError):
         git_available = False
         git_commit = "unavailable"
         git_dirty = None
-        git_diff_sha256 = None
+        git_status_sha256 = None
+        git_untracked_count = None
+        git_tracked_dirty = None
+        git_tracked_diff_sha256 = None
 
     packages: dict[str, str] = {}
     for name in sorted(set(package_names)):
@@ -163,7 +167,10 @@ def collect_runtime_provenance(
         "git_available": git_available,
         "git_commit": git_commit,
         "git_dirty": git_dirty,
-        "git_diff_sha256": git_diff_sha256,
+        "git_status_sha256": git_status_sha256,
+        "git_untracked_count": git_untracked_count,
+        "git_tracked_dirty": git_tracked_dirty,
+        "git_tracked_diff_sha256": git_tracked_diff_sha256,
         "packages": packages,
     }
 

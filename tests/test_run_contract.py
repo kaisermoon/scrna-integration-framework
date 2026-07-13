@@ -110,13 +110,19 @@ def test_snapshot_effective_parameters_rejects_unsupported_value() -> None:
         snapshot_effective_parameters({"UNSUPPORTED": {1, 2}})
 
 
+def _init_git_repo(path: Path) -> Path:
+    tracked = path / "tracked.txt"
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    for key, value in (("user.email", "test@example.org"), ("user.name", "Test")):
+        subprocess.run(["git", "-C", str(path), "config", key, value], check=True)
+    tracked.write_text("before", encoding="utf-8")
+    subprocess.run(["git", "-C", str(path), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(path), "commit", "-qm", "test"], check=True)
+    return tracked
+
+
 def test_collect_runtime_provenance_records_git_and_packages(tmp_path: Path) -> None:
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.org"], check=True)
-    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
-    (tmp_path / "tracked.txt").write_text("content", encoding="utf-8")
-    subprocess.run(["git", "-C", str(tmp_path), "add", "tracked.txt"], check=True)
-    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "test"], check=True)
+    _init_git_repo(tmp_path)
     expected_commit = subprocess.check_output(
         ["git", "-C", str(tmp_path), "rev-parse", "HEAD"], text=True
     ).strip()
@@ -128,7 +134,10 @@ def test_collect_runtime_provenance_records_git_and_packages(tmp_path: Path) -> 
     assert provenance["git_commit"] == expected_commit
     assert provenance["git_available"] is True
     assert provenance["git_dirty"] is False
-    assert provenance["git_diff_sha256"] is None
+    assert provenance["git_status_sha256"] is None
+    assert provenance["git_untracked_count"] == 0
+    assert provenance["git_tracked_dirty"] is False
+    assert provenance["git_tracked_diff_sha256"] is None
     assert provenance["packages"]["pytest"] != "unavailable"
     assert provenance["packages"]["definitely-missing-package"] == "unavailable"
 
@@ -137,18 +146,15 @@ def test_collect_runtime_provenance_marks_git_unavailable(tmp_path: Path) -> Non
     provenance = collect_runtime_provenance(tmp_path)
     assert provenance["git_available"] is False
     assert provenance["git_commit"] == "unavailable"
-    assert provenance["git_dirty"] is None
-    assert provenance["git_diff_sha256"] is None
+    unavailable = (
+        "git_dirty", "git_status_sha256", "git_untracked_count",
+        "git_tracked_dirty", "git_tracked_diff_sha256",
+    )
+    assert all(provenance[key] is None for key in unavailable)
 
 
 def test_collect_runtime_provenance_hashes_tracked_diff(tmp_path: Path) -> None:
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.org"], check=True)
-    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
-    tracked = tmp_path / "tracked.txt"
-    tracked.write_text("before", encoding="utf-8")
-    subprocess.run(["git", "-C", str(tmp_path), "add", "tracked.txt"], check=True)
-    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "test"], check=True)
+    tracked = _init_git_repo(tmp_path)
     tracked.write_text("after", encoding="utf-8")
     expected_diff = subprocess.check_output(
         ["git", "-C", str(tmp_path), "diff", "--binary", "HEAD"]
@@ -156,7 +162,22 @@ def test_collect_runtime_provenance_hashes_tracked_diff(tmp_path: Path) -> None:
 
     provenance = collect_runtime_provenance(tmp_path)
     assert provenance["git_dirty"] is True
-    assert provenance["git_diff_sha256"] == hashlib.sha256(expected_diff).hexdigest()
+    assert provenance["git_tracked_dirty"] is True
+    assert provenance["git_tracked_diff_sha256"] == hashlib.sha256(expected_diff).hexdigest()
+
+
+def test_collect_runtime_provenance_includes_untracked_files(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    (tmp_path / "untracked.txt").write_text("new", encoding="utf-8")
+    status = subprocess.check_output(
+        ["git", "-C", str(tmp_path), "status", "--porcelain=v1", "--untracked-files=all", "-z"]
+    )
+
+    provenance = collect_runtime_provenance(tmp_path)
+    assert provenance["git_dirty"] is True
+    assert provenance["git_status_sha256"] == hashlib.sha256(status).hexdigest()
+    assert provenance["git_untracked_count"] == 1
+    assert provenance["git_tracked_dirty"] is False
 
 
 def test_publish_compatibility_symlink_creates_and_reuses_relative_link(tmp_path: Path) -> None:
