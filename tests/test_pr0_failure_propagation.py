@@ -23,6 +23,14 @@ def _load_runner():
     return module
 
 
+def _load_r_check():
+    spec = importlib.util.spec_from_file_location("check_r_scripts", R_CHECK_PATH)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 def _write_executed_notebook(path: Path, *, error: bool = False) -> None:
     outputs = []
     if error:
@@ -181,6 +189,38 @@ def test_all_pass_has_success_overall_status(monkeypatch, tmp_path: Path) -> Non
     assert runner.main() == 0
     summary = json.loads((tmp_path / "smoke_run_summary.json").read_text(encoding="utf-8"))
     assert summary["status"] == "SUCCESS"
+
+
+def test_r_check_builds_parse_command(monkeypatch, tmp_path: Path) -> None:
+    r_check = _load_r_check()
+    rscript = tmp_path / "custom-Rscript"
+    r_file = tmp_path / "entry point.R"
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=7)
+
+    monkeypatch.setattr(r_check.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["check_r_scripts.py", "--rscript", str(rscript), str(r_file)],
+    )
+
+    assert r_check.main() == 7
+    assert calls == [
+        (
+            [
+                str(rscript),
+                "--vanilla",
+                "-e",
+                "for (f in commandArgs(trailingOnly=TRUE)) parse(file=f)",
+                str(r_file),
+            ],
+            {"check": False},
+        )
+    ]
 
 
 def test_r_check_propagates_rscript_failure(tmp_path: Path) -> None:
