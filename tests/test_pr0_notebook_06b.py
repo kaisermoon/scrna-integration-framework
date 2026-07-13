@@ -23,15 +23,17 @@ def test_06b_params_cell_runs_in_fresh_namespace() -> None:
 
     exec(compile(source, str(NOTEBOOK_PATH), "exec"), namespace)
 
-    assert namespace["OUTPUT_VERSION"] == "v1"
-    assert namespace["UPSTREAM_PATH"] == "results/06_annotated_v1.h5ad"
+    assert namespace["MODE"] == "global"
+    assert namespace["UPSTREAM_RUN_ROOT"] == "results/runs"
+    assert namespace["RUN_ROOT"] == "results/runs"
     assert namespace["LABEL_COL"] == "cell_type_final_v1"
+    assert "UPSTREAM_PATH" not in namespace
 
     assignments = [
         node
         for node in ast.walk(ast.parse(source))
         if isinstance(node, ast.Name)
         and isinstance(node.ctx, ast.Store)
-        and node.id == "OUTPUT_VERSION"
+        and node.id == "RUN_ID"
     ]
     assert len(assignments) == 1
