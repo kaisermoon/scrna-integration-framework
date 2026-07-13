@@ -27,20 +27,8 @@ ACCEPTANCE = {"accepted_by": "researcher", "accepted_at": "2026-07-13T12:00:00Z"
         ({"pca": MethodStatus.FAILED}, {"counts_valid": True}, False, (), StageStatus.FAILED),
         ({"pca": MethodStatus.UNAVAILABLE}, {"counts_valid": True}, False, (), StageStatus.FAILED),
         ({"pca": MethodStatus.SUCCESS}, {"counts_valid": False}, False, (), StageStatus.FAILED),
-        (
-            {"pca": MethodStatus.SUCCESS},
-            {"counts_valid": True},
-            True,
-            (),
-            StageStatus.NEEDS_REVIEW,
-        ),
-        (
-            {"pca": MethodStatus.SUCCESS},
-            {"counts_valid": True},
-            False,
-            ("optional method failed",),
-            StageStatus.SUCCESS_WITH_WARNINGS,
-        ),
+        ({"pca": MethodStatus.SUCCESS}, {"counts_valid": True}, True, (), StageStatus.NEEDS_REVIEW),
+        ({"pca": MethodStatus.SUCCESS}, {"counts_valid": True}, False, ("warning",), StageStatus.SUCCESS_WITH_WARNINGS),
     ],
 )
 def test_determine_stage_status(required, hard, needs_review, warnings, expected) -> None:
@@ -51,6 +39,14 @@ def test_determine_stage_status(required, hard, needs_review, warnings, expected
 def test_determine_stage_status_rejects_empty_hard_postconditions() -> None:
     with pytest.raises(ValueError, match="must not be empty"):
         determine_stage_status({}, {})
+
+
+def test_no_required_methods_must_be_explicitly_allowed() -> None:
+    with pytest.raises(ValueError, match="required_methods must not be empty"):
+        determine_stage_status({}, {"counts_valid": True})
+    assert determine_stage_status(
+        {}, {"counts_valid": True}, allow_no_required_methods=True
+    ) is StageStatus.SUCCESS
 
 
 def test_prepare_run_rejects_duplicate_run_id(tmp_path: Path) -> None:
@@ -119,14 +115,11 @@ def test_warning_run_reuses_valid_manifest_acceptance(tmp_path: Path) -> None:
     assert promote_run(paths).is_file()
 
 
-@pytest.mark.parametrize(
-    "acceptance",
-    [
-        {},
-        {"accepted_by": "", "accepted_at": "2026-07-13T12:00:00Z"},
-        {"accepted_by": "researcher", "accepted_at": ""},
-    ],
-)
+@pytest.mark.parametrize("acceptance", [
+    {},
+    {"accepted_by": "", "accepted_at": "2026-07-13T12:00:00Z"},
+    {"accepted_by": "researcher", "accepted_at": ""},
+])
 def test_warning_run_rejects_incomplete_acceptance(tmp_path: Path, acceptance) -> None:
     paths, _ = _write_draft(tmp_path, StageStatus.SUCCESS_WITH_WARNINGS)
 
@@ -148,10 +141,7 @@ def test_bad_hash_does_not_record_warning_acceptance(tmp_path: Path) -> None:
     before = paths.manifest_path.read_bytes()
 
     with pytest.raises(ValueError, match="hash does not match"):
-        promote_run(
-            paths,
-            warning_acceptance=ACCEPTANCE,
-        )
+        promote_run(paths, warning_acceptance=ACCEPTANCE)
 
     assert paths.manifest_path.read_bytes() == before
 
@@ -184,3 +174,13 @@ def test_successful_promotion_moves_whole_draft_atomically(tmp_path: Path) -> No
     assert not paths.draft_dir.exists()
     assert paths.promoted_dir.is_dir()
     assert resume_run(tmp_path, paths.run_id, promoted=True) == paths
+
+
+def test_relative_root_prepare_promote_and_resume(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    paths, _ = _write_draft(Path("results/runs"), StageStatus.SUCCESS)
+
+    promoted = promote_run(paths)
+
+    assert promoted == tmp_path / "results/runs/success/promoted/checkpoint.h5ad"
+    assert resume_run("results/runs", paths.run_id, promoted=True) == paths

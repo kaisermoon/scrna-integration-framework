@@ -38,11 +38,14 @@ def determine_stage_status(
     *,
     needs_review: bool = False,
     warnings: Sequence[str] = (),
+    allow_no_required_methods: bool = False,
 ) -> StageStatus:
     """根据已发生的执行事实确定 stage 状态，不代替科研选择。"""
 
     if not hard_postconditions:
         raise ValueError("hard_postconditions must not be empty")
+    if not required_methods and not allow_no_required_methods:
+        raise ValueError("required_methods must not be empty unless explicitly allowed")
     method_statuses = [MethodStatus(value) for value in required_methods.values()]
     if any(status is not MethodStatus.SUCCESS for status in method_statuses):
         return StageStatus.FAILED
@@ -83,7 +86,7 @@ def prepare_run(root: str | Path, run_id: str) -> RunPaths:
 
     if not _RUN_ID_RE.fullmatch(run_id):
         raise ValueError("run_id may contain only letters, digits, '.', '_' and '-'")
-    root_path = Path(root)
+    root_path = Path(root).resolve()
     root_path.mkdir(parents=True, exist_ok=True)
     paths = RunPaths(run_id=run_id, run_dir=root_path / run_id)
     paths.run_dir.mkdir()
@@ -133,9 +136,7 @@ def _load_manifest(manifest_path: Path) -> dict[str, Any]:
     return manifest
 
 
-def validate_checkpoint(
-    manifest_path: str | Path, checkpoint_path: str | Path | None = None
-) -> Path:
+def validate_checkpoint(manifest_path: str | Path, checkpoint_path: str | Path | None = None) -> Path:
     """校验 manifest 声明的 checkpoint 路径和内容 hash，可用于安全恢复。"""
 
     manifest_file = Path(manifest_path).resolve()
@@ -163,7 +164,7 @@ def resume_run(root: str | Path, run_id: str, *, promoted: bool = False) -> RunP
 
     if not _RUN_ID_RE.fullmatch(run_id):
         raise ValueError("run_id may contain only letters, digits, '.', '_' and '-'")
-    paths = RunPaths(run_id=run_id, run_dir=Path(root) / run_id)
+    paths = RunPaths(run_id=run_id, run_dir=Path(root).resolve() / run_id)
     run_location = paths.promoted_dir if promoted else paths.draft_dir
     manifest_path = run_location / "manifest.json"
     manifest = _load_manifest(manifest_path)
@@ -180,34 +181,33 @@ def _valid_warning_acceptance(value: Any) -> bool:
     )
 
 
-def promote_run(
-    paths: RunPaths, *, warning_acceptance: Mapping[str, str] | None = None
-) -> Path:
+def promote_run(paths: RunPaths, *, warning_acceptance: Mapping[str, str] | None = None) -> Path:
     """验证状态和 checkpoint 后，将整个 draft 原子提升为 promoted。"""
 
-    if paths.promoted_dir.exists():
-        raise FileExistsError(paths.promoted_dir)
-    manifest = _load_manifest(paths.manifest_path)
+    draft_dir = paths.draft_dir.resolve()
+    promoted_dir = paths.promoted_dir.resolve()
+    manifest_path = draft_dir / "manifest.json"
+    if promoted_dir.exists():
+        raise FileExistsError(promoted_dir)
+    manifest = _load_manifest(manifest_path)
     if manifest.get("run_id") != paths.run_id:
         raise ValueError("manifest run_id does not match run paths")
     status = StageStatus(manifest.get("stage_status"))
     if status in {StageStatus.FAILED, StageStatus.NEEDS_REVIEW}:
         raise ValueError(f"stage status {status.value} cannot be promoted")
-    checkpoint = validate_checkpoint(paths.manifest_path)
+    checkpoint = validate_checkpoint(manifest_path)
     if status is StageStatus.SUCCESS_WITH_WARNINGS:
         acceptance = (
-            manifest.get("warning_acceptance")
-            if warning_acceptance is None
-            else warning_acceptance
+            manifest.get("warning_acceptance") if warning_acceptance is None else warning_acceptance
         )
         if not _valid_warning_acceptance(acceptance):
             raise ValueError("warning acceptance requires accepted_by and accepted_at")
         if manifest.get("warning_acceptance") != acceptance:
             manifest["warning_acceptance"] = dict(acceptance)
-            atomic_write_json(paths.manifest_path, manifest, overwrite=True)
-    relative_checkpoint = checkpoint.relative_to(paths.draft_dir)
-    os.replace(paths.draft_dir, paths.promoted_dir)
-    promoted_checkpoint = validate_checkpoint(paths.promoted_dir / "manifest.json")
-    if promoted_checkpoint != paths.promoted_dir / relative_checkpoint:
+            atomic_write_json(manifest_path, manifest, overwrite=True)
+    relative_checkpoint = checkpoint.relative_to(draft_dir)
+    os.replace(draft_dir, promoted_dir)
+    promoted_checkpoint = validate_checkpoint(promoted_dir / "manifest.json")
+    if promoted_checkpoint != promoted_dir / relative_checkpoint:
         raise ValueError("promoted checkpoint does not match draft checkpoint")
     return promoted_checkpoint
