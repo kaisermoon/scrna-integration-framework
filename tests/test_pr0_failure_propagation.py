@@ -132,8 +132,10 @@ def test_runner_optional_run_ignores_unchanged_legacy_output(monkeypatch, tmp_pa
 def test_core_failure_blocks_downstream_and_returns_nonzero(monkeypatch, tmp_path: Path) -> None:
     runner = _load_runner()
     monkeypatch.setattr(runner, "OUTPUT_DIR", str(tmp_path))
-    monkeypatch.setattr(runner, "NOTEBOOKS", [{"name": "core", "notebook": "core.ipynb", "expected_stage": "core"}])
-    monkeypatch.setattr(runner, "DOWNSTREAM", [("optional", "optional.ipynb", "")])
+    monkeypatch.setattr(runner, "NOTEBOOKS", [
+        {"name": "core", "notebook": "core.ipynb", "expected_stage": "core"},
+        {"name": "later", "notebook": "later.ipynb", "expected_stage": "later"},
+    ])
     calls = []
 
     def fake_run(name, rel_path, output_check):
@@ -146,33 +148,36 @@ def test_core_failure_blocks_downstream_and_returns_nonzero(monkeypatch, tmp_pat
     assert calls == ["core"]
     summary = json.loads((tmp_path / "smoke_run_summary.json").read_text(encoding="utf-8"))
     assert summary["status"] == "FAILED"
-    assert summary["results"][1]["status"] == "BLOCKED"
+    assert summary["results"][1]["status"] == "BLOCKED_FAILURE"
 
 
-def test_optional_failure_is_reported_without_blocking_core(monkeypatch, tmp_path: Path) -> None:
+def test_action_required_stops_core_and_returns_two(monkeypatch, tmp_path: Path) -> None:
     runner = _load_runner()
     monkeypatch.setattr(runner, "OUTPUT_DIR", str(tmp_path))
-    monkeypatch.setattr(runner, "NOTEBOOKS", [{"name": "core", "notebook": "core.ipynb", "expected_stage": "core"}])
-    monkeypatch.setattr(runner, "DOWNSTREAM", [("optional", "optional.ipynb", "")])
+    monkeypatch.setattr(runner, "NOTEBOOKS", [
+        {"name": "04_embedded", "notebook": "04.ipynb", "expected_stage": "04_embedded"},
+        {"name": "05_clustered", "notebook": "05.ipynb", "expected_stage": "05_clustered"},
+    ])
+    calls = []
 
     def fake_run(name, rel_path, output_check):
-        status = "PASS" if name == "core" else "ERROR"
-        return {"name": name, "status": status, "time_seconds": 0}
+        calls.append(name)
+        return {"name": name, "stage": "04_embedded", "status": "REVIEW_REQUIRED", "time_seconds": 0}
 
     monkeypatch.setattr(runner, "run_notebook", fake_run)
 
-    assert runner.main() == 0
+    assert runner.main() == 2
+    assert calls == ["04_embedded"]
     summary = json.loads((tmp_path / "smoke_run_summary.json").read_text(encoding="utf-8"))
-    assert summary["status"] == "SUCCESS_WITH_WARNINGS"
-    assert summary["results"][1]["status"] == "ERROR"
-    assert summary["results"][1]["required"] is False
+    assert summary["status"] == "ACTION_REQUIRED"
+    assert summary["results"][1]["status"] == "BLOCKED_REVIEW"
 
 
 def test_all_pass_has_success_overall_status(monkeypatch, tmp_path: Path) -> None:
     runner = _load_runner()
     monkeypatch.setattr(runner, "OUTPUT_DIR", str(tmp_path))
-    monkeypatch.setattr(runner, "NOTEBOOKS", [{"name": "core", "notebook": "core.ipynb", "expected_stage": "core"}])
-    monkeypatch.setattr(runner, "DOWNSTREAM", [("optional", "optional.ipynb", "")])
+    monkeypatch.setattr(runner, "NOTEBOOKS", [
+        {"name": "core", "notebook": "core.ipynb", "expected_stage": "core"}])
     monkeypatch.setattr(
         runner,
         "run_notebook",

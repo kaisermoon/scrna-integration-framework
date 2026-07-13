@@ -137,10 +137,11 @@ def test_missing_unknown_and_failed_status_are_rejected(status, tmp_path: Path) 
 
 
 @pytest.mark.parametrize("status", ["SUCCESS", "SUCCESS_WITH_WARNINGS"])
-def test_success_states_must_be_promoted(status, tmp_path: Path) -> None:
+def test_draft_success_states_require_promotion(status, tmp_path: Path) -> None:
     runner, root = _runner(), tmp_path / "runs"
     _write_run(root, "draft", status=status, state="draft")
-    _error(runner, {}, root)
+    outcome = runner.validate_manifest_delta({}, root, "05_clustered")
+    assert outcome["action"] == "READY_TO_PROMOTE"
 
 
 @pytest.mark.parametrize("target", ["checkpoint", "artifact"])
@@ -156,13 +157,15 @@ def test_tampered_checkpoint_or_artifact_is_rejected(target, tmp_path: Path) -> 
 def test_warning_acceptance_and_needs_review(tmp_path: Path) -> None:
     runner, accepted = _runner(), tmp_path / "accepted"
     _write_run(accepted, "warnings", status="SUCCESS_WITH_WARNINGS")
-    assert runner.validate_manifest_delta({}, accepted, "05_clustered")["status"] == "SUCCESS_WITH_WARNINGS"
+    accepted_outcome = runner.validate_manifest_delta({}, accepted, "05_clustered")
+    assert accepted_outcome["status"] == "SUCCESS_WITH_WARNINGS" and accepted_outcome["action"] == "PASS"
     rejected = tmp_path / "rejected"
     _write_run(rejected, "warnings", status="SUCCESS_WITH_WARNINGS", state="draft", accepted=False)
-    _error(runner, {}, rejected)
+    assert runner.validate_manifest_delta({}, rejected, "05_clustered")["action"] == "REVIEW_REQUIRED"
     review = tmp_path / "review"
     _write_run(review, "review", status="NEEDS_REVIEW", state="draft")
-    assert runner.validate_manifest_delta({}, review, "05_clustered")["state"] == "draft"
+    outcome = runner.validate_manifest_delta({}, review, "05_clustered")
+    assert outcome["state"] == "draft" and outcome["action"] == "REVIEW_REQUIRED"
 
 
 @pytest.mark.parametrize("kind", ["state", "manifest"])

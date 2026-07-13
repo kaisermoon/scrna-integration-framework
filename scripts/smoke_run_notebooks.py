@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""冒烟运行器：依次 nbconvert --execute 主线（01→06）与全部下游（D01→D14）notebook，
-逐 cell 记录 pass/fail、耗时与报错，产出 JSON 汇总。
+"""冒烟运行器：依次执行并验收主线（01→06）notebook，
+逐 cell 记录 pass/fail、耗时、人工动作点与报错，产出 JSON 汇总。
 
 这不是 pytest 用例（不被 tests/ 收集），是端到端手动冒烟脚本，用于验证
 notebook 之间的 h5ad 输入输出契约不断裂。命令行直接运行：
@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from scrna_integration.run_contract import sha256_file, validate_checkpoint
+from scrna_integration.run_contract import atomic_write_json, sha256_file, validate_checkpoint
 
 PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 os.chdir(PROJECT_ROOT)
@@ -51,26 +51,6 @@ NOTEBOOKS = [
     {"name": "06_annotated", "notebook": "notebooks/06_annotated.ipynb", "expected_stage": "06_annotated"},
 ]
 
-# Downstream notebooks（D 前缀命名：目录内各模块彼此无执行先后，均以
-# 06_annotated.h5ad 为输入、可单独运行，D 编号仅为清单序位不表示顺序）
-DOWNSTREAM = [
-    ("D01_deg", "notebooks/07_downstream/D01_deg.ipynb", ""),
-    ("D02_pseudobulk_deg", "notebooks/07_downstream/D02_pseudobulk_deg.ipynb", ""),
-    ("D03_cnv", "notebooks/07_downstream/D03_cnv.ipynb", ""),
-    ("D04_pseudotime", "notebooks/07_downstream/D04_pseudotime.ipynb", ""),
-    ("D05_pseudotime_monocle3", "notebooks/07_downstream/D05_pseudotime_monocle3.ipynb", ""),
-    ("D06_pseudotime_cellrank2", "notebooks/07_downstream/D06_pseudotime_cellrank2.ipynb", ""),
-    ("D07_potency_cytotrace2", "notebooks/07_downstream/D07_potency_cytotrace2.ipynb", ""),
-    ("D08_pseudotime_compare", "notebooks/07_downstream/D08_pseudotime_compare.ipynb", ""),
-    ("D09_abundance", "notebooks/07_downstream/D09_abundance.ipynb", ""),
-    ("D10_pathway", "notebooks/07_downstream/D10_pathway.ipynb", ""),
-    ("D11_grn", "notebooks/07_downstream/D11_grn.ipynb", ""),
-    ("D12_cell_communication", "notebooks/07_downstream/D12_cell_communication.ipynb", ""),
-    ("D13_gene_modules", "notebooks/07_downstream/D13_gene_modules.ipynb", ""),
-    ("D14_trajectory_de", "notebooks/07_downstream/D14_trajectory_de.ipynb", ""),
-]
-
-
 class ManifestValidationError(ValueError):
     """带稳定状态码的 runner manifest 验收错误。"""
 
@@ -80,6 +60,14 @@ class ManifestValidationError(ValueError):
 
 
 _RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z", re.ASCII)
+MAX_FAILED_CELLS = 20
+MAX_ENAME_CHARS, MAX_EVALUE_CHARS, MAX_TRACEBACK_CHARS = 100, 500, 1000
+TRUNCATION_MARKER = "...[truncated]"
+
+
+def _bounded_error(value, limit):
+    text = str(value).strip()
+    return text if len(text) <= limit else text[:limit - len(TRUNCATION_MARKER)] + TRUNCATION_MARKER
 
 
 def snapshot_run_manifests(run_root=RUN_ROOT):
@@ -88,6 +76,11 @@ def snapshot_run_manifests(run_root=RUN_ROOT):
     if not root.is_dir():
         return {}
     return {path: sha256_file(path) for path in root.glob("*/*/manifest.json") if path.is_file()}
+
+
+def snapshot_run_dirs(run_root=RUN_ROOT):
+    root = Path(run_root)
+    return set(root.iterdir()) if root.is_dir() else set()
 
 
 def _assert_manifest_hash(manifest_path, expected_hash):
@@ -150,24 +143,87 @@ def validate_manifest_delta(before, run_root=RUN_ROOT, expected_stage=None):
     status = manifest.get("stage_status")
     if status not in {"SUCCESS", "SUCCESS_WITH_WARNINGS", "NEEDS_REVIEW"}:
         raise ManifestValidationError("INVALID_MANIFEST", f"unacceptable stage status: {status}")
+    acceptance_valid = False
     if status == "SUCCESS_WITH_WARNINGS":
         acceptance = manifest.get("warning_acceptance")
-        if not isinstance(acceptance, dict) or not all(
+        acceptance_valid = isinstance(acceptance, dict) and all(
             isinstance(acceptance.get(key), str) and acceptance[key].strip()
             for key in ("accepted_by", "accepted_at")
-        ):
+        )
+        if state == "promoted" and not acceptance_valid:
             raise ManifestValidationError("INVALID_MANIFEST", "warnings require accepted_by and accepted_at")
     if status == "NEEDS_REVIEW" and state != "draft":
         raise ManifestValidationError("INVALID_MANIFEST", "NEEDS_REVIEW must remain draft")
-    if status != "NEEDS_REVIEW" and state != "promoted":
-        raise ManifestValidationError("INVALID_MANIFEST", f"{status} must be promoted")
     try:
         checkpoint = validate_checkpoint(manifest_path)
     except (OSError, ValueError) as error:
         raise ManifestValidationError("INVALID_MANIFEST", f"checkpoint validation failed: {error}") from error
     _assert_manifest_hash(manifest_path, expected_hash)
+    if state == "promoted":
+        action = "PASS"
+    elif status == "NEEDS_REVIEW" or (status == "SUCCESS_WITH_WARNINGS" and not acceptance_valid):
+        action = "REVIEW_REQUIRED"
+    else:
+        action = "READY_TO_PROMOTE"
     return {"run_id": run_id, "stage": manifest["stage"], "state": state, "status": status,
-            "manifest": str(manifest_path), "checkpoint": str(checkpoint)}
+            "action": action, "manifest": str(manifest_path), "checkpoint": str(checkpoint)}
+
+
+def audit_partial_run(before_dirs, expected_stage, failure, run_root=RUN_ROOT):
+    """为唯一安全 draft 写审计，再尽力清理；审计错误不覆盖原始失败。"""
+    try:
+        return _audit_partial_run(before_dirs, expected_stage, failure, run_root)
+    except Exception as error:
+        return {"run_id": None, "manifest": None,
+                "audit_error": f"unexpected audit failure: {error}"}
+
+
+def _audit_partial_run(before_dirs, expected_stage, failure, run_root):
+    if before_dirs is None or Path(run_root).is_symlink():
+        return None
+    new_dirs = [path for path in snapshot_run_dirs(run_root) - before_dirs
+                if path.is_dir() or path.is_symlink()]
+    if len(new_dirs) != 1:
+        return None
+    run_dir = new_dirs[0]
+    if run_dir.is_symlink() or _RUN_ID_RE.fullmatch(run_dir.name) is None:
+        return None
+    draft = run_dir / "draft"
+    manifest_path = draft / "manifest.json"
+    if not draft.is_dir() or draft.is_symlink() or manifest_path.exists() or manifest_path.is_symlink():
+        return None
+    if (run_dir / "promoted").exists() or (run_dir / "promoted").is_symlink():
+        return None
+    payload = {"run_id": run_dir.name, "stage": expected_stage,
+               "stage_status": "FAILED", "failure": failure}
+    try:
+        atomic_write_json(manifest_path, payload)
+    except Exception as error:
+        return {"run_id": run_dir.name, "manifest": None,
+                "audit_error": f"audit write failed: {error}"}
+    cleanup_errors = []
+    for child in list(draft.iterdir()):
+        if child == manifest_path:
+            continue
+        try:
+            if child.is_symlink() or child.is_file():
+                child.unlink()
+            elif child.is_dir():
+                shutil.rmtree(child)
+            else:
+                raise ValueError("unsupported partial entry")
+        except Exception as error:
+            cleanup_errors.append(f"{child.name}: {error}")
+    audit_error = None
+    if cleanup_errors:
+        payload["audit_cleanup_errors"] = cleanup_errors
+        audit_error = "; ".join(cleanup_errors)
+        try:
+            atomic_write_json(manifest_path, payload, overwrite=True)
+        except Exception as error:
+            audit_error += f"; cleanup error persistence failed: {error}"
+    return {"run_id": run_dir.name, "manifest": str(manifest_path),
+            "audit_error": audit_error}
 
 
 def parse_cell_status(executed_nb_path):
@@ -180,20 +236,18 @@ def parse_cell_status(executed_nb_path):
             continue
         source = ''.join(cell['source'])[:120].replace('\n', ' ')
         outputs = cell.get('outputs', [])
-        has_error = any(o.get('output_type') == 'error' for o in outputs)
+        error_output = next((o for o in outputs if o.get('output_type') == 'error'), None)
+        has_error = error_output is not None
+        ename = evalue = traceback_summary = ''
         if not outputs:
             # Assignments and other valid cells often produce no display output.
             status = 'PASS' if cell.get('execution_count') is not None else 'SKIP'
         elif has_error:
-            err_text = ''
-            for o in outputs:
-                if o.get('output_type') == 'error':
-                    err_text = f"{o.get('ename', '')}: {o.get('evalue', '')}"
-                    # Include traceback summary
-                    traceback = o.get('traceback', [])
-                    if traceback:
-                        err_text += ' | ' + traceback[-1].strip()[:200]
-                    break
+            ename = _bounded_error(error_output.get('ename', ''), MAX_ENAME_CHARS)
+            evalue = _bounded_error(error_output.get('evalue', ''), MAX_EVALUE_CHARS)
+            traceback = error_output.get('traceback', [])
+            traceback_summary = _bounded_error(traceback[-1], MAX_TRACEBACK_CHARS) if traceback else ''
+            err_text = f"{ename}: {evalue}" + (f" | {traceback_summary}" if traceback_summary else '')
             status = 'FAIL'
         else:
             status = 'PASS'
@@ -201,9 +255,19 @@ def parse_cell_status(executed_nb_path):
             'cell_num': i + 1,
             'status': status,
             'error': err_text if has_error else '',
+            'ename': ename,
+            'evalue': evalue,
+            'traceback_summary': traceback_summary,
             'source': source
         })
     return cells
+
+
+def _failed_cell_records(cells):
+    failed = [cell for cell in cells if cell['status'] == 'FAIL']
+    records = [{"cell_index": cell["cell_num"], "ename": cell["ename"], "evalue": cell["evalue"],
+                "traceback_summary": cell["traceback_summary"]} for cell in failed[:MAX_FAILED_CELLS]]
+    return records, max(0, len(failed) - MAX_FAILED_CELLS)
 
 
 def run_notebook(name, rel_path, expected_stage=None):
@@ -219,6 +283,7 @@ def run_notebook(name, rel_path, expected_stage=None):
     print(f"{'='*60}")
 
     manifests_before = snapshot_run_manifests(RUN_ROOT) if expected_stage else None
+    run_dirs_before = snapshot_run_dirs(RUN_ROOT) if expected_stage else None
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     t_start = time.time()
@@ -240,7 +305,13 @@ def run_notebook(name, rel_path, expected_stage=None):
         )
     except subprocess.TimeoutExpired:
         elapsed = time.time() - t_start
-        return {"name": name, "status": "TIMEOUT", "time_seconds": elapsed, "error": "Execution timeout (>1h)"}
+        audit = audit_partial_run(run_dirs_before, expected_stage,
+                                  {"returncode": None, "stderr": "Execution timeout (>1h)"}, RUN_ROOT)
+        return {"name": name, "stage": expected_stage, "status": "TIMEOUT",
+                "time_seconds": elapsed, "error": "Execution timeout (>1h)",
+                "run_id": audit.get("run_id") if audit else None,
+                "manifest": audit.get("manifest") if audit else None,
+                "audit_error": audit.get("audit_error") if audit else None}
 
     elapsed = time.time() - t_start
 
@@ -269,6 +340,7 @@ def run_notebook(name, rel_path, expected_stage=None):
 
     result_info = {
         "name": name,
+        "stage": expected_stage,
         "status": notebook_status,
         "time_seconds": round(elapsed, 1),
         "total_cells": len(cells),
@@ -281,15 +353,32 @@ def run_notebook(name, rel_path, expected_stage=None):
         "cells": cells,
         "executed_nb_path": exec_out
     }
+    if notebook_status != "PASS":
+        failed_cell = next((cell for cell in cells if cell['status'] == 'FAIL'), None)
+        result_info["error"] = (failed_cell["error"] if failed_cell else
+                                result_info["stderr_tail"] or f"Notebook execution status: {notebook_status}")
 
     if notebook_status == "PASS" and manifests_before is not None:
         try:
-            result_info["run_outcome"] = validate_manifest_delta(
-                manifests_before, RUN_ROOT, expected_stage
-            )
+            outcome = validate_manifest_delta(manifests_before, RUN_ROOT, expected_stage)
+            result_info["run_outcome"] = outcome
+            notebook_status = result_info["status"] = result_info["action"] = outcome["action"]
         except ManifestValidationError as error:
             notebook_status = result_info["status"] = error.code
             result_info["error"] = str(error)
+    elif notebook_status != "PASS" and run_dirs_before is not None:
+        failure = {"returncode": result.returncode}
+        if result.stderr:
+            failure["stderr"] = result.stderr[-500:]
+        if os.path.exists(exec_out):
+            failure["executed_notebook"] = exec_out
+        cell_errors, omitted = _failed_cell_records(cells)
+        if cell_errors:
+            failure["cell_errors"] = cell_errors
+            failure["truncated_cell_error_count"] = omitted
+        audit = audit_partial_run(run_dirs_before, expected_stage, failure, RUN_ROOT)
+        if audit:
+            result_info.update(audit)
 
     print(f"  Status: {notebook_status} | Time: {elapsed:.1f}s | Cells: {result_info['pass_cells']}P/{result_info['fail_cells']}F/{result_info['skip_cells']}S")
     return result_info
@@ -307,39 +396,24 @@ def main():
     all_results = []
     total_start = time.time()
 
-    # Core stages are required. Once one fails, downstream inputs are invalid.
-    core_failed = False
+    exit_code = 0
+    overall_status = "SUCCESS"
     for index, notebook in enumerate(NOTEBOOKS):
         name = notebook["name"]
         result = run_notebook(name, notebook["notebook"], notebook["expected_stage"])
         all_results.append(result)
         if result["status"] != "PASS":
-            core_failed = True
-            blocked_names = [item["name"] for item in NOTEBOOKS[index + 1:]]
-            blocked_names.extend(item[0] for item in DOWNSTREAM)
-            all_results.extend({"name": blocked_name, "status": "BLOCKED", "time_seconds": 0,
-                                "error": f"Required core stage {name} failed"}
-                               for blocked_name in blocked_names)
+            action_required = result["status"] in {"READY_TO_PROMOTE", "REVIEW_REQUIRED"}
+            exit_code = 2 if action_required else 1
+            overall_status = "ACTION_REQUIRED" if action_required else "FAILED"
+            blocked_status = "BLOCKED_REVIEW" if action_required else "BLOCKED_FAILURE"
+            all_results.extend({"name": item["name"], "stage": item["expected_stage"],
+                                "status": blocked_status, "action": blocked_status,
+                                "time_seconds": 0, "error": f"Core stage {name} stopped the run"}
+                               for item in NOTEBOOKS[index + 1:])
             break
 
-    # Downstream notebooks are optional diagnostics in this PR. Their failures
-    # remain visible in the report but do not override a successful core run.
-    if not core_failed:
-        for name, rel_path, output_check in DOWNSTREAM:
-            result = run_notebook(name, rel_path, output_check)
-            result["required"] = False
-            all_results.append(result)
-
     total_elapsed = time.time() - total_start
-    optional_failed = any(
-        r.get("required") is False and r["status"] != "PASS" for r in all_results
-    )
-    if core_failed:
-        overall_status = "FAILED"
-    elif optional_failed:
-        overall_status = "SUCCESS_WITH_WARNINGS"
-    else:
-        overall_status = "SUCCESS"
 
     # ===== Produce JSON summary =====
     summary = {
@@ -350,9 +424,16 @@ def main():
     }
 
     for r in all_results:
+        outcome = r.get("run_outcome") or {}
         entry = {
             "name": r["name"],
+            "stage": outcome.get("stage", r.get("stage")),
+            "run_id": outcome.get("run_id", r.get("run_id")),
+            "manifest": outcome.get("manifest", r.get("manifest")),
             "status": r["status"],
+            "action": r.get("action", outcome.get("action")),
+            "error": r.get("error"),
+            "audit_error": r.get("audit_error"),
             "time_seconds": r.get("time_seconds", 0),
             "cells_total": r.get("total_cells", 0),
             "cells_pass": r.get("pass_cells", 0),
@@ -361,15 +442,10 @@ def main():
             "returncode": r.get("returncode", None),
             "stderr_tail": r.get("stderr_tail", ""),
             "stdout_tail": r.get("stdout_tail", ""),
-            "required": r.get("required", r["name"] in {item["name"] for item in NOTEBOOKS}),
-            "run_outcome": r.get("run_outcome"),
         }
         # Add failed cell details
         if r.get("cells"):
-            entry["failures"] = [
-                {"cell_num": c["cell_num"], "error": c["error"], "source": c["source"]}
-                for c in r["cells"] if c["status"] == "FAIL"
-            ]
+            entry["failures"], entry["truncated_cell_error_count"] = _failed_cell_records(r["cells"])
         summary["results"].append(entry)
 
     # Write summary JSON
@@ -381,7 +457,7 @@ def main():
     print(f"\n{'='*60}")
     status_message = {
         "FAILED": "PIPELINE TEST FAILED",
-        "SUCCESS_WITH_WARNINGS": "PIPELINE TEST COMPLETE WITH WARNINGS",
+        "ACTION_REQUIRED": "PIPELINE ACTION REQUIRED",
         "SUCCESS": "PIPELINE TEST COMPLETE",
     }[overall_status]
     print(status_message)
@@ -392,7 +468,7 @@ def main():
         status_icon = "OK" if r['status'] == 'PASS' else r['status']
         print(f"  {r['name']:25s}  {status_icon:10s}  {r.get('time_seconds', 0):8.1f}s  {r.get('pass_cells', 0)}P/{r.get('fail_cells', 0)}F/{r.get('skip_cells', 0)}S")
 
-    return 1 if core_failed else 0
+    return exit_code
 
 
 if __name__ == "__main__":
