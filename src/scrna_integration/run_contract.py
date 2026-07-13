@@ -9,6 +9,7 @@ import math
 import os
 import platform
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -16,7 +17,7 @@ import types
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,59 @@ _SENSITIVE_PARAMETER_TOKENS = {"TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "CRE
 _RESEARCH_KEY_ALLOWLIST = frozenset(
     "BATCH_KEY CELL_TYPE_KEY CLUSTER_KEY DISEASE_KEY DONOR_KEY GROUP_KEY HVG_KEY LABEL_KEY SAMPLE_KEY".split()
 )
+_R_PACKAGE_RE = re.compile(r"[A-Za-z][A-Za-z0-9.]*\Z")
+_VERSION_RE = re.compile(r"[0-9]+(?:[.-][0-9]+)*\Z")
+
+
+def utc_now_rfc3339() -> str:
+    """生成无时区歧义的 UTC 时间，供 manifest 记录事件顺序。"""
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def collect_r_environment(
+    package_names: Sequence[str] = (), *, rscript: str | Path = "Rscript", timeout: float = 10
+) -> dict[str, Any]:
+    """显式采集 R 版本；不由 Python runtime provenance 自动触发。"""
+
+    packages = sorted(set(package_names))
+    if any(not isinstance(name, str) or _R_PACKAGE_RE.fullmatch(name) is None for name in packages):
+        raise ValueError("R package names must be safe identifiers")
+    script = (
+        "cat('R\\t', as.character(getRversion()), '\\n', sep=''); "
+        "for (p in commandArgs(trailingOnly=TRUE)) { "
+        "v <- tryCatch(as.character(packageVersion(p)), error=function(e) 'unavailable'); "
+        "cat('P\\t', p, '\\t', v, '\\n', sep='') }"
+    )
+    unavailable = {"available": False, "version": "unavailable", "packages": {name: "unavailable" for name in packages}}
+    try:
+        result = subprocess.run(
+            [os.fspath(rscript), "--vanilla", "-e", script, *packages],
+            check=True, capture_output=True, text=True, timeout=timeout,
+        )
+    except OSError:
+        return unavailable | {"error": "Rscript unavailable"}
+    except subprocess.TimeoutExpired:
+        return unavailable | {"error": "R provenance timed out"}
+    except subprocess.SubprocessError:
+        return unavailable | {"error": "R provenance command failed"}
+    try:
+        lines = [line.split("\t") for line in result.stdout.splitlines() if line]
+        if not lines or len(lines[0]) != 2 or lines[0][0] != "R":
+            raise ValueError
+        version = lines[0][1]
+        package_lines = lines[1:]
+        if (len(package_lines) != len(packages) or
+                any(len(fields) != 3 or fields[0] != "P" for fields in package_lines)):
+            raise ValueError
+        found = {fields[1]: fields[2] for fields in package_lines}
+        if (_VERSION_RE.fullmatch(version) is None or len(version) > 128 or
+                set(found) != set(packages) or len(found) != len(package_lines) or
+                any(value != "unavailable" and _VERSION_RE.fullmatch(value) is None or len(value) > 128
+                    for value in found.values())):
+            raise ValueError
+    except (IndexError, ValueError):
+        return unavailable | {"error": "malformed R provenance output"}
+    return {"available": True, "version": version, "packages": found}
 
 
 def _is_sensitive_parameter_name(name: str) -> bool:
@@ -294,6 +348,173 @@ def sha256_file(path: str | Path, *, chunk_size: int = 1024 * 1024) -> str:
     return digest.hexdigest()
 
 
+def _stat_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_mode)
+
+
+def _confined_path(path: str | Path, root: str | Path) -> tuple[Path, str]:
+    base = Path(os.path.abspath(os.fspath(root)))
+    candidate = Path(path)
+    candidate = Path(os.path.abspath(os.fspath(candidate if candidate.is_absolute() else base / candidate)))
+    if candidate == base or not candidate.is_relative_to(base):
+        raise ValueError("path must identify an entry inside root")
+    relative = candidate.relative_to(base).as_posix()
+    if "\\" in relative or any(ord(char) < 32 or ord(char) == 127 for char in relative):
+        raise ValueError("path must produce a safe relative manifest path")
+    cursor = base
+    for part in (Path(relative).parts[:-1]):
+        info = os.lstat(cursor)
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise ValueError("path contains a symlink or non-directory component")
+        cursor /= part
+    info = os.lstat(cursor)
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise ValueError("path root contains a symlink or is not a directory")
+    return candidate, relative
+
+
+def _open_parent(root: str | Path, relative: str) -> tuple[int, str]:
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(root, flags)
+    try:
+        for part in Path(relative).parts[:-1]:
+            child = os.open(part, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+    except Exception:
+        os.close(descriptor)
+        raise
+    return descriptor, Path(relative).parts[-1]
+
+
+def _bound_file_hash_at(parent: int, name: str) -> tuple[tuple[int, ...], int, str]:
+    before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise ValueError("fingerprinted path must be a regular non-symlink file")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(name, flags, dir_fd=parent)
+    try:
+        opened = os.fstat(descriptor)
+        digest = hashlib.sha256()
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            while chunk := stream.read(1024 * 1024):
+                digest.update(chunk)
+        after_open = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    after = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    identities = {_stat_identity(item) for item in (before, opened, after_open, after)}
+    if len(identities) != 1:
+        raise RuntimeError("file changed while fingerprinting")
+    return _stat_identity(before), before.st_size, digest.hexdigest()
+
+
+def _scan_tree(root: int) -> tuple[list[tuple[str, int, str]], list[str]]:
+    root_info = os.fstat(root)
+    if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
+        raise ValueError("tree root must be a non-symlink directory")
+    records: list[tuple[str, int, str]] = []
+    directories: list[str] = []
+    seen: set[str] = set()
+
+    def visit(directory: int, prefix: str = "") -> None:
+        with os.scandir(directory) as entries:
+            ordered = sorted(entries, key=lambda item: item.name)
+        for entry in ordered:
+            info = entry.stat(follow_symlinks=False)
+            relative = f"{prefix}/{entry.name}" if prefix else entry.name
+            folded = relative.casefold()
+            if folded in seen:
+                raise ValueError("tree contains duplicate or case-colliding paths")
+            seen.add(folded)
+            if stat.S_ISLNK(info.st_mode):
+                raise ValueError("tree must not contain symlinks")
+            if stat.S_ISDIR(info.st_mode):
+                directories.append(relative)
+                child = os.open(
+                    entry.name,
+                    os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=directory,
+                )
+                try:
+                    if _stat_identity(os.fstat(child)) != _stat_identity(info):
+                        raise RuntimeError("tree changed while fingerprinting")
+                    visit(child, relative)
+                finally:
+                    os.close(child)
+            elif stat.S_ISREG(info.st_mode):
+                _, size, checksum = _bound_file_hash_at(directory, entry.name)
+                records.append((relative, size, checksum))
+            else:
+                raise ValueError("tree must contain only directories and regular files")
+
+    visit(root)
+    return sorted(records), sorted(directories)
+
+
+def fingerprint_input(
+    role: str, path: str | Path, root: str | Path, *, kind: str = "file"
+) -> dict[str, str]:
+    """为输入生成稳定记录，并在计算期间绑定路径与内容。"""
+
+    if not isinstance(role, str) or _RUN_ID_RE.fullmatch(role) is None:
+        raise ValueError("role must be a safe identifier")
+    _, relative = _confined_path(path, root)
+    if kind == "file":
+        parent, name = _open_parent(root, relative)
+        try:
+            identity, _, checksum = _bound_file_hash_at(parent, name)
+        finally:
+            os.close(parent)
+    elif kind == "tree":
+        parent, name = _open_parent(root, relative)
+        try:
+            tree = os.open(name, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+                           dir_fd=parent)
+        finally:
+            os.close(parent)
+        try:
+            identity = _stat_identity(os.fstat(tree))
+            first, second = _scan_tree(tree), _scan_tree(tree)
+            if first != second:
+                raise RuntimeError("tree changed while fingerprinting")
+            canonical = json.dumps(first[0], ensure_ascii=False, separators=(",", ":")).encode()
+            checksum = hashlib.sha256(canonical).hexdigest()
+        finally:
+            os.close(tree)
+    else:
+        raise ValueError("kind must be file or tree")
+    verify_parent, verify_name = _open_parent(root, relative)
+    try:
+        verify = os.stat(verify_name, dir_fd=verify_parent, follow_symlinks=False)
+    finally:
+        os.close(verify_parent)
+    if _stat_identity(verify) != identity:
+        raise RuntimeError("path changed while fingerprinting")
+    return {"role": role, "path": relative, "kind": kind, "sha256": checksum}
+
+
+def artifact_record(role: str, path: str | Path, state_dir: str | Path) -> dict[str, str]:
+    """为 run state 内的常规文件生成可校验的 artifact 记录。"""
+
+    if not isinstance(role, str) or _RUN_ID_RE.fullmatch(role) is None:
+        raise ValueError("role must be a safe identifier")
+    _, relative = _confined_path(path, state_dir)
+    parent, name = _open_parent(state_dir, relative)
+    try:
+        identity, _, checksum = _bound_file_hash_at(parent, name)
+    finally:
+        os.close(parent)
+    verify_parent, verify_name = _open_parent(state_dir, relative)
+    try:
+        verify = os.stat(verify_name, dir_fd=verify_parent, follow_symlinks=False)
+    finally:
+        os.close(verify_parent)
+    if _stat_identity(verify) != identity:
+        raise RuntimeError("artifact path changed while fingerprinting")
+    return {"role": role, "path": relative, "sha256": checksum}
+
+
 def atomic_write_json(path: str | Path, payload: Mapping[str, Any], *, overwrite: bool = False) -> None:
     """在目标目录原子写 JSON；默认不覆盖任何既有证据。"""
 
@@ -406,7 +627,7 @@ def _validate_records(records: list[Any], label: str, *, require_kind: bool) -> 
 
 
 def _validate_runtime_provenance(runtime: dict[str, Any]) -> None:
-    if runtime.keys() != _RUNTIME_PROVENANCE_KEYS:
+    if runtime.keys() not in (_RUNTIME_PROVENANCE_KEYS, _RUNTIME_PROVENANCE_KEYS | {"r_environment"}):
         raise ValueError("manifest runtime_provenance must use the exact collector keys")
     if (not all(isinstance(runtime[key], str) and runtime[key] for key in ("python", "platform", "git_commit")) or
             type(runtime["git_available"]) is not bool or not isinstance(runtime["packages"], dict)):
@@ -414,6 +635,27 @@ def _validate_runtime_provenance(runtime: dict[str, Any]) -> None:
     packages = runtime["packages"]
     if any(not isinstance(key, str) or not key or not isinstance(value, str) or not value for key, value in packages.items()):
         raise ValueError("manifest runtime_provenance packages must map non-empty strings to strings")
+    if "r_environment" in runtime:
+        environment = runtime["r_environment"]
+        if not isinstance(environment, dict):
+            raise ValueError("manifest r_environment must be an object")
+        available = environment.get("available")
+        expected = {"available", "version", "packages"} if available is True else {
+            "available", "version", "packages", "error"
+        }
+        if (environment.keys() != expected or type(available) is not bool or
+                not isinstance(environment.get("version"), str) or not environment["version"] or
+                len(environment["version"]) > 128 or
+                _VERSION_RE.fullmatch(environment["version"]) is None or
+                not isinstance(environment.get("packages"), dict) or
+                any(not isinstance(key, str) or not key or not isinstance(value, str) or not value or
+                    len(value) > 128 or value != "unavailable" and _VERSION_RE.fullmatch(value) is None
+                    for key, value in environment["packages"].items()) or
+                (available is False and (environment["version"] != "unavailable" or
+                 not isinstance(environment.get("error"), str) or not environment["error"] or
+                 len(environment["error"]) > 256 or
+                 any(ord(char) < 32 for char in environment["error"])))):
+            raise ValueError("manifest r_environment has invalid availability fields")
     optional = ("git_dirty", "git_tracked_dirty")
     if any(value is not None and type(value) is not bool for value in (runtime[key] for key in optional)):
         raise ValueError("manifest runtime_provenance dirty fields must be booleans or null")

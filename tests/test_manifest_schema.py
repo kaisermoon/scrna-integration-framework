@@ -163,3 +163,14 @@ def test_path_context_is_strict(tmp_path: Path) -> None:
         validate_manifest(path, state="promoted")
     with pytest.raises(ValueError, match="expected run_id"):
         validate_manifest(path, expected_run_id="other")
+
+
+def test_runtime_provenance_accepts_strict_r_environment() -> None:
+    manifest = _manifest()
+    manifest["runtime_provenance"]["r_environment"] = {
+        "available": True, "version": "4.4.1", "packages": {"Seurat": "5.1.0"},
+    }
+    assert validate_manifest(manifest, state="draft")["runtime_provenance"]["r_environment"]["available"]
+    manifest["runtime_provenance"]["r_environment"]["error"] = "forbidden"
+    with pytest.raises(ValueError, match="r_environment"):
+        validate_manifest(manifest, state="draft")
