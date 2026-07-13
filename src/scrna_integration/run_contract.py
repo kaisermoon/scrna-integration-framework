@@ -259,6 +259,7 @@ class RunPaths:
 
 
 _RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+_SHA256_RE = re.compile(r"[0-9a-fA-F]{64}\Z")
 
 
 def prepare_run(root: str | Path, run_id: str) -> RunPaths:
@@ -316,10 +317,87 @@ def _load_manifest(manifest_path: Path) -> dict[str, Any]:
     return manifest
 
 
+def _reject_run_state_symlinks(
+    run_dir: Path, state_dir: Path, manifest_file: Path | None = None
+) -> None:
+    checks = (("run root", run_dir.parent), ("run directory", run_dir), ("run state", state_dir))
+    if manifest_file is not None:
+        checks += (("manifest", manifest_file),)
+    for label, path in checks:
+        if path.is_symlink():
+            raise ValueError(f"{label} path must not be a symlink: {path}")
+
+
+def _resolve_manifest_file(manifest_path: str | Path) -> Path:
+    candidate = Path(manifest_path)
+    state_dir = candidate.parent
+    _reject_run_state_symlinks(state_dir.parent, state_dir, candidate)
+    return candidate.resolve()
+
+
+def _validate_declared_artifacts(
+    manifest_file: Path, manifest: Mapping[str, Any]
+) -> dict[str, Path]:
+    if "artifacts" not in manifest:
+        return {}
+    artifacts = manifest["artifacts"]
+    if not isinstance(artifacts, list) or not artifacts:
+        raise ValueError("manifest artifacts must be a non-empty list when present")
+    state_dir = manifest_file.parent.resolve()
+    validated: dict[str, Path] = {}
+    seen_paths: set[Path] = set()
+    for index, artifact in enumerate(artifacts):
+        if not isinstance(artifact, Mapping):
+            raise ValueError(f"artifact {index} must be an object")
+        role = artifact.get("role")
+        if not isinstance(role, str) or _RUN_ID_RE.fullmatch(role) is None:
+            raise ValueError(f"artifact {index} role must be a non-empty safe name")
+        if role in validated:
+            raise ValueError(f"duplicate artifact role: {role}")
+        raw_path = artifact.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise ValueError(f"artifact {role} path must be a non-empty relative path")
+        relative = Path(raw_path)
+        if not relative.name or any(ord(char) < 32 or ord(char) == 127 for char in raw_path):
+            raise ValueError(f"artifact {role} path must be a safe relative file path")
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError(f"artifact {role} path must stay inside the run state directory")
+        lexical = manifest_file.parent / relative
+        resolved = lexical.resolve()
+        if not resolved.is_relative_to(state_dir):
+            raise ValueError(f"artifact {role} path escapes the run state directory")
+        cursor = manifest_file.parent
+        for part in relative.parts:
+            cursor /= part
+            if cursor.is_symlink():
+                raise ValueError(f"artifact {role} path contains a symlink")
+        if resolved in seen_paths:
+            raise ValueError(f"duplicate artifact path: {relative.as_posix()}")
+        if not resolved.exists():
+            raise FileNotFoundError(resolved)
+        if not resolved.is_file():
+            raise ValueError(f"artifact {role} must be a regular file")
+        expected_hash = artifact.get("sha256")
+        if not isinstance(expected_hash, str) or _SHA256_RE.fullmatch(expected_hash) is None:
+            raise ValueError(f"artifact {role} sha256 must be 64 hexadecimal characters")
+        if sha256_file(resolved) != expected_hash.lower():
+            raise ValueError(f"artifact {role} hash does not match manifest")
+        validated[role] = resolved
+        seen_paths.add(resolved)
+    return validated
+
+
+def validate_artifacts(manifest_path: str | Path) -> dict[str, Path]:
+    """校验 manifest 声明的全部附属产物，返回规范化 role 到路径映射。"""
+
+    manifest_file = _resolve_manifest_file(manifest_path)
+    return _validate_declared_artifacts(manifest_file, _load_manifest(manifest_file))
+
+
 def validate_checkpoint(manifest_path: str | Path, checkpoint_path: str | Path | None = None) -> Path:
     """校验 manifest 声明的 checkpoint 路径和内容 hash，可用于安全恢复。"""
 
-    manifest_file = Path(manifest_path).resolve()
+    manifest_file = _resolve_manifest_file(manifest_path)
     manifest = _load_manifest(manifest_file)
     checkpoint = manifest.get("checkpoint")
     if not isinstance(checkpoint, dict):
@@ -336,6 +414,7 @@ def validate_checkpoint(manifest_path: str | Path, checkpoint_path: str | Path |
         raise FileNotFoundError(expected)
     if sha256_file(expected) != checkpoint.get("sha256"):
         raise ValueError("checkpoint hash does not match manifest")
+    _validate_declared_artifacts(manifest_file, manifest)
     return expected
 
 
@@ -344,9 +423,12 @@ def resume_run(root: str | Path, run_id: str, *, promoted: bool = False) -> RunP
 
     if not _RUN_ID_RE.fullmatch(run_id):
         raise ValueError("run_id may contain only letters, digits, '.', '_' and '-'")
-    paths = RunPaths(run_id=run_id, run_dir=Path(root).resolve() / run_id)
+    root_path = Path(root)
+    if root_path.is_symlink():
+        raise ValueError(f"run root path must not be a symlink: {root_path}")
+    paths = RunPaths(run_id=run_id, run_dir=root_path.resolve() / run_id)
     run_location = paths.promoted_dir if promoted else paths.draft_dir
-    manifest_path = run_location / "manifest.json"
+    manifest_path = _resolve_manifest_file(run_location / "manifest.json")
     manifest = _load_manifest(manifest_path)
     if manifest.get("run_id") != run_id:
         raise ValueError("manifest run_id does not match run paths")
@@ -366,7 +448,10 @@ def promote_run(paths: RunPaths, *, warning_acceptance: Mapping[str, str] | None
 
     draft_dir = paths.draft_dir.resolve()
     promoted_dir = paths.promoted_dir.resolve()
-    manifest_path = draft_dir / "manifest.json"
+    _reject_run_state_symlinks(paths.run_dir, paths.draft_dir, paths.draft_dir / "manifest.json")
+    if paths.promoted_dir.is_symlink():
+        raise ValueError(f"run state path must not be a symlink: {paths.promoted_dir}")
+    manifest_path = _resolve_manifest_file(draft_dir / "manifest.json")
     if promoted_dir.exists():
         raise FileExistsError(promoted_dir)
     manifest = _load_manifest(manifest_path)
@@ -387,7 +472,21 @@ def promote_run(paths: RunPaths, *, warning_acceptance: Mapping[str, str] | None
             atomic_write_json(manifest_path, manifest, overwrite=True)
     relative_checkpoint = checkpoint.relative_to(draft_dir)
     os.replace(draft_dir, promoted_dir)
-    promoted_checkpoint = validate_checkpoint(promoted_dir / "manifest.json")
-    if promoted_checkpoint != promoted_dir / relative_checkpoint:
-        raise ValueError("promoted checkpoint does not match draft checkpoint")
+    try:
+        promoted_checkpoint = validate_checkpoint(promoted_dir / "manifest.json")
+        if promoted_checkpoint != promoted_dir / relative_checkpoint:
+            raise ValueError("promoted checkpoint does not match draft checkpoint")
+    except Exception as original_error:
+        try:
+            if draft_dir.exists() or draft_dir.is_symlink():
+                raise FileExistsError(f"cannot roll back over existing draft: {draft_dir}")
+            if promoted_dir.is_symlink() or not promoted_dir.is_dir():
+                raise ValueError(f"cannot roll back unsafe promoted state: {promoted_dir}")
+            os.replace(promoted_dir, draft_dir)
+        except Exception as rollback_error:
+            raise RuntimeError(
+                f"post-promotion validation failed ({original_error}); "
+                f"rollback failed ({rollback_error})"
+            ) from original_error
+        raise
     return promoted_checkpoint
