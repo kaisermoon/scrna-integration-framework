@@ -5,7 +5,7 @@ on:
     branches: [main]
   pull_request:
 
-# 多语言自适应。各语言 lint 起始为占位（|| true），项目正式启用规则后去掉 || true。
+# 必需门禁只检查会导致真实执行失败的 Python 错误；风格债务后续分批清理。
 
 jobs:
   lint:
@@ -23,19 +23,11 @@ jobs:
         if: hashFiles('pyproject.toml', 'setup.py', 'setup.cfg', 'requirements*.txt') != ''
         run: |
           pip install ruff
-          ruff check . || true   # 占位：项目正式启用 ruff 规则后去掉 || true
-
-      # ----- R (lintr) -----
-      - name: Set up R
-        if: hashFiles('DESCRIPTION') != ''
-        uses: r-lib/actions/setup-r@v2
-        with:
-          r-version: "4.4"
-      - name: Run lintr
-        if: hashFiles('DESCRIPTION') != ''
-        run: |
-          Rscript -e 'install.packages("lintr")'
-          Rscript -e 'lintr::lint_dir(path = ".")' || true   # 占位
+          ruff check src tests scripts \
+            notebooks/04_embedded.ipynb \
+            notebooks/05_clustered.ipynb \
+            notebooks/06b_per_cluster.ipynb \
+            --select F821,E9
 
       # ----- JS / TS (npm run lint) -----
       - name: Set up Node
