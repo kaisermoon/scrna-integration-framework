@@ -60,7 +60,7 @@ def test_runner_rejects_python_cell_error(monkeypatch, tmp_path: Path) -> None:
 
     monkeypatch.setattr(runner.subprocess, "run", fake_run)
 
-    result = runner.run_notebook("broken", "broken.ipynb", "")
+    result = runner.run_notebook("broken", "broken.ipynb")
 
     assert result["status"] == "ERROR"
     assert result["fail_cells"] == 1
@@ -78,13 +78,13 @@ def test_runner_rejects_nonzero_nbconvert(monkeypatch, tmp_path: Path) -> None:
         lambda *args, **kwargs: SimpleNamespace(returncode=2, stdout="", stderr="failed"),
     )
 
-    result = runner.run_notebook("broken", "broken.ipynb", "")
+    result = runner.run_notebook("broken", "broken.ipynb")
 
     assert result["status"] == "ERROR"
     assert result["returncode"] == 2
 
 
-def test_runner_rejects_missing_required_output(monkeypatch, tmp_path: Path) -> None:
+def test_runner_optional_run_ignores_missing_legacy_output(monkeypatch, tmp_path: Path) -> None:
     runner = _load_runner()
     notebook = tmp_path / "stage.ipynb"
     notebook.write_text("{}", encoding="utf-8")
@@ -99,13 +99,13 @@ def test_runner_rejects_missing_required_output(monkeypatch, tmp_path: Path) -> 
 
     monkeypatch.setattr(runner.subprocess, "run", fake_run)
 
-    result = runner.run_notebook("stage", "stage.ipynb", "results/required.h5ad")
+    result = runner.run_notebook("stage", "stage.ipynb")
 
-    assert result["status"] == "MISSING_OUTPUT"
-    assert result["output_exists"] is False
+    assert result["status"] == "PASS"
+    assert "output_exists" not in result
 
 
-def test_runner_rejects_unchanged_required_output(monkeypatch, tmp_path: Path) -> None:
+def test_runner_optional_run_ignores_unchanged_legacy_output(monkeypatch, tmp_path: Path) -> None:
     runner = _load_runner()
     notebook = tmp_path / "stage.ipynb"
     notebook.write_text("{}", encoding="utf-8")
@@ -123,16 +123,16 @@ def test_runner_rejects_unchanged_required_output(monkeypatch, tmp_path: Path) -
 
     monkeypatch.setattr(runner.subprocess, "run", fake_run)
 
-    result = runner.run_notebook("stage", "stage.ipynb", "results/required.h5ad")
+    result = runner.run_notebook("stage", "stage.ipynb")
 
-    assert result["status"] == "STALE_OUTPUT"
-    assert result["output_fresh"] is False
+    assert result["status"] == "PASS"
+    assert "output_fresh" not in result
 
 
 def test_core_failure_blocks_downstream_and_returns_nonzero(monkeypatch, tmp_path: Path) -> None:
     runner = _load_runner()
     monkeypatch.setattr(runner, "OUTPUT_DIR", str(tmp_path))
-    monkeypatch.setattr(runner, "NOTEBOOKS", [("core", "core.ipynb", "required.h5ad")])
+    monkeypatch.setattr(runner, "NOTEBOOKS", [{"name": "core", "notebook": "core.ipynb", "expected_stage": "core"}])
     monkeypatch.setattr(runner, "DOWNSTREAM", [("optional", "optional.ipynb", "")])
     calls = []
 
@@ -152,7 +152,7 @@ def test_core_failure_blocks_downstream_and_returns_nonzero(monkeypatch, tmp_pat
 def test_optional_failure_is_reported_without_blocking_core(monkeypatch, tmp_path: Path) -> None:
     runner = _load_runner()
     monkeypatch.setattr(runner, "OUTPUT_DIR", str(tmp_path))
-    monkeypatch.setattr(runner, "NOTEBOOKS", [("core", "core.ipynb", "required.h5ad")])
+    monkeypatch.setattr(runner, "NOTEBOOKS", [{"name": "core", "notebook": "core.ipynb", "expected_stage": "core"}])
     monkeypatch.setattr(runner, "DOWNSTREAM", [("optional", "optional.ipynb", "")])
 
     def fake_run(name, rel_path, output_check):
@@ -171,7 +171,7 @@ def test_optional_failure_is_reported_without_blocking_core(monkeypatch, tmp_pat
 def test_all_pass_has_success_overall_status(monkeypatch, tmp_path: Path) -> None:
     runner = _load_runner()
     monkeypatch.setattr(runner, "OUTPUT_DIR", str(tmp_path))
-    monkeypatch.setattr(runner, "NOTEBOOKS", [("core", "core.ipynb", "required.h5ad")])
+    monkeypatch.setattr(runner, "NOTEBOOKS", [{"name": "core", "notebook": "core.ipynb", "expected_stage": "core"}])
     monkeypatch.setattr(runner, "DOWNSTREAM", [("optional", "optional.ipynb", "")])
     monkeypatch.setattr(
         runner,

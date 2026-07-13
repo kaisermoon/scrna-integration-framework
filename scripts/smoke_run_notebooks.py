@@ -13,6 +13,7 @@ smoke_run_notebooks_outputs/，不污染仓库。
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -20,6 +21,8 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
+
+from scrna_integration.run_contract import sha256_file, validate_checkpoint
 
 PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 os.chdir(PROJECT_ROOT)
@@ -31,20 +34,21 @@ JUPYTER = shutil.which("jupyter") or "jupyter"
 
 # 执行产物输出目录：用系统临时目录（跨平台）而非硬编码 /tmp
 OUTPUT_DIR = os.path.join(tempfile.gettempdir(), "smoke_run_notebooks_outputs")
+RUN_ROOT = Path(PROJECT_ROOT) / "results" / "runs"
 
 # Notebook list in execution order
 NOTEBOOKS = [
     # Stage 01 - per dataset (4)
-    ("01_kim", "notebooks/01_per_dataset/01_kim.ipynb", "results/01_kim_v1.h5ad"),
-    ("01_nancang", "notebooks/01_per_dataset/01_nancang.ipynb", "results/01_nancang_v1.h5ad"),
-    ("01_nowicki", "notebooks/01_per_dataset/01_nowicki.ipynb", "results/01_nowicki_v1.h5ad"),
-    ("01_yue", "notebooks/01_per_dataset/01_yue.ipynb", "results/01_yue_v1.h5ad"),
+    {"name": "01_kim", "notebook": "notebooks/01_per_dataset/01_kim.ipynb", "expected_stage": "01_qcd"},
+    {"name": "01_nancang", "notebook": "notebooks/01_per_dataset/01_nancang.ipynb", "expected_stage": "01_qcd"},
+    {"name": "01_nowicki", "notebook": "notebooks/01_per_dataset/01_nowicki.ipynb", "expected_stage": "01_qcd"},
+    {"name": "01_yue", "notebook": "notebooks/01_per_dataset/01_yue.ipynb", "expected_stage": "01_qcd"},
     # Stage 02-06 - core pipeline (5)
-    ("02_merged", "notebooks/02_merged.ipynb", "results/02_merged_v1.h5ad"),
-    ("03_normalized", "notebooks/03_normalized.ipynb", "results/03_normalized_v1.h5ad"),
-    ("04_embedded", "notebooks/04_embedded.ipynb", "results/04_embedded_v1.h5ad"),
-    ("05_clustered", "notebooks/05_clustered.ipynb", "results/05_clustered_v1.h5ad"),
-    ("06_annotated", "notebooks/06_annotated.ipynb", "results/06_annotated_v1.h5ad"),
+    {"name": "02_merged", "notebook": "notebooks/02_merged.ipynb", "expected_stage": "02_merged"},
+    {"name": "03_normalized", "notebook": "notebooks/03_normalized.ipynb", "expected_stage": "03_normalized"},
+    {"name": "04_embedded", "notebook": "notebooks/04_embedded.ipynb", "expected_stage": "04_embedded"},
+    {"name": "05_clustered", "notebook": "notebooks/05_clustered.ipynb", "expected_stage": "05_clustered"},
+    {"name": "06_annotated", "notebook": "notebooks/06_annotated.ipynb", "expected_stage": "06_annotated"},
 ]
 
 # Downstream notebooks（D 前缀命名：目录内各模块彼此无执行先后，均以
@@ -65,6 +69,105 @@ DOWNSTREAM = [
     ("D13_gene_modules", "notebooks/07_downstream/D13_gene_modules.ipynb", ""),
     ("D14_trajectory_de", "notebooks/07_downstream/D14_trajectory_de.ipynb", ""),
 ]
+
+
+class ManifestValidationError(ValueError):
+    """带稳定状态码的 runner manifest 验收错误。"""
+
+    def __init__(self, code, message):
+        self.code = code
+        super().__init__(message)
+
+
+_RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z", re.ASCII)
+
+
+def snapshot_run_manifests(run_root=RUN_ROOT):
+    """记录 run 根目录下 manifest 路径及内容 hash。"""
+    root = Path(run_root)
+    if not root.is_dir():
+        return {}
+    return {path: sha256_file(path) for path in root.glob("*/*/manifest.json") if path.is_file()}
+
+
+def _assert_manifest_hash(manifest_path, expected_hash):
+    try:
+        current_hash = sha256_file(manifest_path)
+    except OSError as error:
+        raise ManifestValidationError("STALE_RUN", f"new manifest disappeared: {error}") from error
+    if current_hash != expected_hash:
+        raise ManifestValidationError("STALE_RUN", "new manifest changed during validation")
+
+
+def _manifest_location(manifest_path, run_root):
+    try:
+        relative = Path(manifest_path).relative_to(Path(run_root))
+    except ValueError as error:
+        raise ManifestValidationError("INVALID_MANIFEST", "manifest is outside run root") from error
+    if len(relative.parts) != 3 or relative.name != "manifest.json":
+        raise ManifestValidationError(
+            "INVALID_MANIFEST", "manifest path must be <run_id>/<draft|promoted>/manifest.json"
+        )
+    run_id, state, _ = relative.parts
+    if _RUN_ID_RE.fullmatch(run_id) is None:
+        raise ManifestValidationError("INVALID_MANIFEST", f"unsafe run_id directory: {run_id!r}")
+    if state not in {"draft", "promoted"}:
+        raise ManifestValidationError("INVALID_MANIFEST", f"unknown run state: {state}")
+    return run_id, state
+
+
+def validate_manifest_delta(before, run_root=RUN_ROOT, expected_stage=None):
+    """验收一次 core 执行唯一新增且完整的 run manifest。"""
+    after = snapshot_run_manifests(run_root)
+    changed = [path for path in before if after.get(path) != before[path]]
+    if changed:
+        names = ", ".join(str(path) for path in sorted(changed))
+        raise ManifestValidationError("STALE_RUN", f"preexisting manifest was modified: {names}")
+    new_paths = sorted(after.keys() - before.keys())
+    if not new_paths:
+        raise ManifestValidationError("MISSING_MANIFEST", "execution produced no new run manifest")
+    if len(new_paths) != 1:
+        raise ManifestValidationError(
+            "MULTIPLE_MANIFESTS", f"execution produced {len(new_paths)} new run manifests"
+        )
+    manifest_path = new_paths[0]
+    expected_hash = after[manifest_path]
+    _assert_manifest_hash(manifest_path, expected_hash)
+    run_id, state = _manifest_location(manifest_path, run_root)
+    try:
+        with manifest_path.open(encoding="utf-8") as stream:
+            manifest = json.load(stream)
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ManifestValidationError("INVALID_MANIFEST", f"cannot read manifest: {error}") from error
+    if not isinstance(manifest, dict):
+        raise ManifestValidationError("INVALID_MANIFEST", "manifest must be a JSON object")
+    if manifest.get("run_id") != run_id:
+        raise ManifestValidationError("INVALID_MANIFEST", "manifest run_id does not match directory")
+    if manifest.get("stage") != expected_stage:
+        raise ManifestValidationError(
+            "INVALID_MANIFEST", f"expected stage {expected_stage}, got {manifest.get('stage')}"
+        )
+    status = manifest.get("stage_status")
+    if status not in {"SUCCESS", "SUCCESS_WITH_WARNINGS", "NEEDS_REVIEW"}:
+        raise ManifestValidationError("INVALID_MANIFEST", f"unacceptable stage status: {status}")
+    if status == "SUCCESS_WITH_WARNINGS":
+        acceptance = manifest.get("warning_acceptance")
+        if not isinstance(acceptance, dict) or not all(
+            isinstance(acceptance.get(key), str) and acceptance[key].strip()
+            for key in ("accepted_by", "accepted_at")
+        ):
+            raise ManifestValidationError("INVALID_MANIFEST", "warnings require accepted_by and accepted_at")
+    if status == "NEEDS_REVIEW" and state != "draft":
+        raise ManifestValidationError("INVALID_MANIFEST", "NEEDS_REVIEW must remain draft")
+    if status != "NEEDS_REVIEW" and state != "promoted":
+        raise ManifestValidationError("INVALID_MANIFEST", f"{status} must be promoted")
+    try:
+        checkpoint = validate_checkpoint(manifest_path)
+    except (OSError, ValueError) as error:
+        raise ManifestValidationError("INVALID_MANIFEST", f"checkpoint validation failed: {error}") from error
+    _assert_manifest_hash(manifest_path, expected_hash)
+    return {"run_id": run_id, "stage": manifest["stage"], "state": state, "status": status,
+            "manifest": str(manifest_path), "checkpoint": str(checkpoint)}
 
 
 def parse_cell_status(executed_nb_path):
@@ -103,7 +206,7 @@ def parse_cell_status(executed_nb_path):
     return cells
 
 
-def run_notebook(name, rel_path, output_check):
+def run_notebook(name, rel_path, expected_stage=None):
     """Run a single notebook with nbconvert, return results."""
     nb_path = os.path.join(PROJECT_ROOT, rel_path)
     if not os.path.exists(nb_path):
@@ -115,11 +218,7 @@ def run_notebook(name, rel_path, output_check):
     print(f"Running: {name} ({rel_path})")
     print(f"{'='*60}")
 
-    output_path = os.path.join(PROJECT_ROOT, output_check) if output_check else None
-    output_before = None
-    if output_path and os.path.exists(output_path):
-        stat = os.stat(output_path)
-        output_before = (stat.st_mtime_ns, stat.st_size)
+    manifests_before = snapshot_run_manifests(RUN_ROOT) if expected_stage else None
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     t_start = time.time()
@@ -183,22 +282,14 @@ def run_notebook(name, rel_path, output_check):
         "executed_nb_path": exec_out
     }
 
-    # Check if expected output file exists
-    if output_path:
-        output_exists = os.path.exists(output_path)
-        result_info["output_exists"] = output_exists
-        if output_exists:
-            stat = os.stat(output_path)
-            output_after = (stat.st_mtime_ns, stat.st_size)
-            result_info["output_size_bytes"] = stat.st_size
-            result_info["output_fresh"] = output_before is None or output_after != output_before
-        else:
-            result_info["output_fresh"] = False
-
-        if notebook_status == "PASS" and not output_exists:
-            notebook_status = result_info["status"] = "MISSING_OUTPUT"
-        elif notebook_status == "PASS" and not result_info["output_fresh"]:
-            notebook_status = result_info["status"] = "STALE_OUTPUT"
+    if notebook_status == "PASS" and manifests_before is not None:
+        try:
+            result_info["run_outcome"] = validate_manifest_delta(
+                manifests_before, RUN_ROOT, expected_stage
+            )
+        except ManifestValidationError as error:
+            notebook_status = result_info["status"] = error.code
+            result_info["error"] = str(error)
 
     print(f"  Status: {notebook_status} | Time: {elapsed:.1f}s | Cells: {result_info['pass_cells']}P/{result_info['fail_cells']}F/{result_info['skip_cells']}S")
     return result_info
@@ -218,21 +309,17 @@ def main():
 
     # Core stages are required. Once one fails, downstream inputs are invalid.
     core_failed = False
-    for index, (name, rel_path, output_check) in enumerate(NOTEBOOKS):
-        result = run_notebook(name, rel_path, output_check)
+    for index, notebook in enumerate(NOTEBOOKS):
+        name = notebook["name"]
+        result = run_notebook(name, notebook["notebook"], notebook["expected_stage"])
         all_results.append(result)
         if result["status"] != "PASS":
             core_failed = True
-            blocked = NOTEBOOKS[index + 1:] + DOWNSTREAM
-            all_results.extend(
-                {
-                    "name": blocked_name,
-                    "status": "BLOCKED",
-                    "time_seconds": 0,
-                    "error": f"Required core stage {name} failed",
-                }
-                for blocked_name, _, _ in blocked
-            )
+            blocked_names = [item["name"] for item in NOTEBOOKS[index + 1:]]
+            blocked_names.extend(item[0] for item in DOWNSTREAM)
+            all_results.extend({"name": blocked_name, "status": "BLOCKED", "time_seconds": 0,
+                                "error": f"Required core stage {name} failed"}
+                               for blocked_name in blocked_names)
             break
 
     # Downstream notebooks are optional diagnostics in this PR. Their failures
@@ -271,12 +358,11 @@ def main():
             "cells_pass": r.get("pass_cells", 0),
             "cells_fail": r.get("fail_cells", 0),
             "cells_skip": r.get("skip_cells", 0),
-            "output_exists": r.get("output_exists", None),
-            "output_size_bytes": r.get("output_size_bytes", None),
             "returncode": r.get("returncode", None),
             "stderr_tail": r.get("stderr_tail", ""),
             "stdout_tail": r.get("stdout_tail", ""),
-            "required": r.get("required", r["name"] in {n for n, _, _ in NOTEBOOKS}),
+            "required": r.get("required", r["name"] in {item["name"] for item in NOTEBOOKS}),
+            "run_outcome": r.get("run_outcome"),
         }
         # Add failed cell details
         if r.get("cells"):
