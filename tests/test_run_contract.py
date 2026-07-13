@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -44,9 +45,9 @@ def test_snapshot_effective_parameters_normalizes_and_sorts(tmp_path: Path) -> N
         "RUNTIME": os,
     }
 
-    assert snapshot_effective_parameters(namespace) == {
+    assert snapshot_effective_parameters(namespace, path_root=tmp_path) == {
         "ALPHA": {"nested": [3, True]},
-        "ZETA": ["first", str(tmp_path / "input.h5ad")],
+        "ZETA": ["first", "input.h5ad"],
     }
 
 
@@ -54,7 +55,11 @@ def test_snapshot_effective_parameters_redacts_secrets_and_honors_exclude() -> N
     params = snapshot_effective_parameters(
         {
             "OPENAI_API_KEY": object(),
+            "OPENAI_KEY": "secret",
             "API_TOKEN": "token-value",
+            "PRIVATE_KEY": "secret",
+            "AWS_ACCESS_KEY_ID": "secret",
+            "AUTH_HEADER": "secret",
             "ACCESS_TOKEN": "token-value",
             "PASSWORD_FILE": Path("secret.txt"),
             "CREDENTIAL": {"raw": "secret"},
@@ -70,13 +75,33 @@ def test_snapshot_effective_parameters_redacts_secrets_and_honors_exclude() -> N
     assert params == {
         "ACCESS_TOKEN": "<redacted>",
         "API_TOKEN": "<redacted>",
+        "AUTH_HEADER": "<redacted>",
+        "AWS_ACCESS_KEY_ID": "<redacted>",
         "BATCH_KEY": "batch",
         "CREDENTIAL": "<redacted>",
         "GROUP_KEY": "sample",
         "LABEL_KEY": "cell_type",
         "OPENAI_API_KEY": "<redacted>",
+        "OPENAI_KEY": "<redacted>",
         "PASSWORD_FILE": "<redacted>",
+        "PRIVATE_KEY": "<redacted>",
         "VISIBLE": 1,
+    }
+
+
+def test_snapshot_effective_parameters_hides_absolute_paths(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+
+    assert snapshot_effective_parameters(
+        {
+            "INPUT_PATH": project_root / "data" / "input.h5ad",
+            "RSCRIPT_BIN": str(tmp_path / "external" / "Rscript"),
+        },
+        path_root=project_root,
+    ) == {
+        "INPUT_PATH": "data/input.h5ad",
+        "RSCRIPT_BIN": "<external>/Rscript",
     }
 
 
@@ -101,15 +126,40 @@ def test_collect_runtime_provenance_records_git_and_packages(tmp_path: Path) -> 
     assert provenance["python"] == sys.version.split()[0]
     assert provenance["platform"]
     assert provenance["git_commit"] == expected_commit
+    assert provenance["git_available"] is True
+    assert provenance["git_dirty"] is False
+    assert provenance["git_diff_sha256"] is None
     assert provenance["packages"]["pytest"] != "unavailable"
     assert provenance["packages"]["definitely-missing-package"] == "unavailable"
 
 
 def test_collect_runtime_provenance_marks_git_unavailable(tmp_path: Path) -> None:
-    assert collect_runtime_provenance(tmp_path)["git_commit"] == "unavailable"
+    provenance = collect_runtime_provenance(tmp_path)
+    assert provenance["git_available"] is False
+    assert provenance["git_commit"] == "unavailable"
+    assert provenance["git_dirty"] is None
+    assert provenance["git_diff_sha256"] is None
 
 
-def test_publish_compatibility_symlink_creates_and_updates_relative_link(tmp_path: Path) -> None:
+def test_collect_runtime_provenance_hashes_tracked_diff(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.org"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    tracked = tmp_path / "tracked.txt"
+    tracked.write_text("before", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "test"], check=True)
+    tracked.write_text("after", encoding="utf-8")
+    expected_diff = subprocess.check_output(
+        ["git", "-C", str(tmp_path), "diff", "--binary", "HEAD"]
+    )
+
+    provenance = collect_runtime_provenance(tmp_path)
+    assert provenance["git_dirty"] is True
+    assert provenance["git_diff_sha256"] == hashlib.sha256(expected_diff).hexdigest()
+
+
+def test_publish_compatibility_symlink_creates_and_reuses_relative_link(tmp_path: Path) -> None:
     target_one = tmp_path / "runs" / "one.h5ad"
     target_two = tmp_path / "runs" / "two.h5ad"
     target_one.parent.mkdir()
@@ -122,9 +172,10 @@ def test_publish_compatibility_symlink_creates_and_updates_relative_link(tmp_pat
     assert not os.readlink(link).startswith("/")
     assert link.resolve() == target_one.resolve()
 
-    publish_compatibility_symlink(link, target_two)
-    assert link.resolve() == target_two.resolve()
-    assert list(tmp_path.glob(".latest.h5ad.*.tmp")) == []
+    assert publish_compatibility_symlink(link, target_one) == link
+    with pytest.raises(FileExistsError):
+        publish_compatibility_symlink(link, target_two)
+    assert link.resolve() == target_one.resolve()
 
 
 def test_publish_compatibility_symlink_rejects_real_file_and_missing_target(
@@ -143,20 +194,23 @@ def test_publish_compatibility_symlink_rejects_real_file_and_missing_target(
     assert real_file.read_text(encoding="utf-8") == "do not replace"
 
 
-def test_publish_compatibility_symlink_cleans_temp_after_replace_failure(
+def test_publish_compatibility_symlink_does_not_overwrite_concurrent_entry(
     monkeypatch, tmp_path: Path
 ) -> None:
     target = tmp_path / "target.h5ad"
     target.write_text("target", encoding="utf-8")
 
-    def fail_replace(source, destination):
-        raise OSError("simulated replace failure")
+    link = tmp_path / "latest.h5ad"
 
-    monkeypatch.setattr(os, "replace", fail_replace)
-    with pytest.raises(OSError, match="simulated replace failure"):
-        publish_compatibility_symlink(tmp_path / "latest.h5ad", target)
+    def competing_create(self, target, *args, **kwargs):
+        self.write_text("concurrent", encoding="utf-8")
+        raise FileExistsError(self)
 
-    assert list(tmp_path.glob(".latest.h5ad.*.tmp")) == []
+    monkeypatch.setattr(Path, "symlink_to", competing_create)
+    with pytest.raises(FileExistsError):
+        publish_compatibility_symlink(link, target)
+
+    assert link.read_text(encoding="utf-8") == "concurrent"
 
 
 @pytest.mark.parametrize(
