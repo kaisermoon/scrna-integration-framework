@@ -10,6 +10,7 @@ from scrna_integration.run_contract import (
     MANIFEST_SCHEMA_VERSION,
     MAX_MANIFEST_FAILURE_BYTES,
     atomic_write_json,
+    collect_r_environment,
     validate_manifest,
 )
 
@@ -45,7 +46,7 @@ def _manifest(status="SUCCESS"):
 
 
 def _record(*, artifact=False, **updates):
-    return {"role": "input", "path": "input/data.h5ad", "sha256": "1" * 64, **({} if artifact else {"kind": "file"})} | updates
+    return {"role": "input", "path": "input/data.h5ad", "sha256": "1" * 64, **({"size": 1} if artifact else {"kind": "file"})} | updates
 
 
 def _available_runtime(**updates):
@@ -81,6 +82,8 @@ def test_valid_v1_states(status, state, accepted) -> None:
     ("inputs", [_record(role="bad role")]), ("inputs", [_record(path="../escape")]), ("inputs", [_record(kind="blob")]), ("inputs", [_record(sha256="bad")]),
     ("inputs", [_record(path="a"), _record(path="b")]), ("inputs", [_record(), _record(role="other")]),
     ("artifacts", [_record(artifact=True, role=None)]), ("artifacts", [_record(artifact=True, path="/absolute")]), ("artifacts", [_record(artifact=True, sha256="bad")]),
+    ("artifacts", [_record(artifact=True, size=True)]), ("artifacts", [_record(artifact=True, size=-1)]), ("artifacts", [_record(artifact=True, size=1.0)]),
+    ("artifacts", [{"role": "input", "path": "input/data.h5ad", "sha256": "1" * 64}]),
     ("artifacts", [_record(artifact=True, path="checkpoint.h5ad")]), ("artifacts", [_record(artifact=True, path="a"), _record(artifact=True, path="b")]),
     ("artifacts", [_record(artifact=True), _record(artifact=True, role="other")]),
     ("checkpoint", {"path": "../escape", "sha256": "0" * 64}), ("checkpoint", {"path": "checkpoint.h5ad", "sha256": "bad"}),
@@ -165,12 +168,29 @@ def test_path_context_is_strict(tmp_path: Path) -> None:
         validate_manifest(path, expected_run_id="other")
 
 
-def test_runtime_provenance_accepts_strict_r_environment() -> None:
+def test_runtime_provenance_accepts_strict_r_environment(monkeypatch) -> None:
     manifest = _manifest()
     manifest["runtime_provenance"]["r_environment"] = {
         "available": True, "version": "4.4.1", "packages": {"Seurat": "5.1.0"},
     }
     assert validate_manifest(manifest, state="draft")["runtime_provenance"]["r_environment"]["available"]
     manifest["runtime_provenance"]["r_environment"]["error"] = "forbidden"
+    with pytest.raises(ValueError, match="r_environment"):
+        validate_manifest(manifest, state="draft")
+    monkeypatch.setattr("scrna_integration.run_contract.subprocess.run",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError()))
+    manifest["runtime_provenance"]["r_environment"] = collect_r_environment(["Seurat"])
+    assert validate_manifest(manifest, state="draft")["runtime_provenance"]["r_environment"]["available"] is False
+
+
+@pytest.mark.parametrize("environment", [
+    {"available": True, "version": "4.4.1", "packages": {"bad key": "1.0"}},
+    {"available": True, "version": "4.4.1", "packages": {1: "1.0"}},
+    {"available": True, "version": "4.4.1", "packages": {"Seurat": "bad"}},
+    {"available": False, "version": "unavailable", "packages": {"Seurat": "1.0"}, "error": "missing"},
+])
+def test_r_environment_rejects_malformed_package_keys_and_values(environment) -> None:
+    manifest = _manifest()
+    manifest["runtime_provenance"]["r_environment"] = environment
     with pytest.raises(ValueError, match="r_environment"):
         validate_manifest(manifest, state="draft")

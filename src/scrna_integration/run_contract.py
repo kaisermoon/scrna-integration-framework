@@ -27,7 +27,7 @@ _SENSITIVE_PARAMETER_TOKENS = {"TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "CRE
 _RESEARCH_KEY_ALLOWLIST = frozenset(
     "BATCH_KEY CELL_TYPE_KEY CLUSTER_KEY DISEASE_KEY DONOR_KEY GROUP_KEY HVG_KEY LABEL_KEY SAMPLE_KEY".split()
 )
-_R_PACKAGE_RE = re.compile(r"[A-Za-z][A-Za-z0-9.]*\Z")
+_R_PACKAGE_RE = re.compile(r"[A-Za-z](?:[A-Za-z0-9.]*[A-Za-z0-9])?\Z")
 _VERSION_RE = re.compile(r"[0-9]+(?:[.-][0-9]+)*\Z")
 
 
@@ -409,12 +409,11 @@ def _bound_file_hash_at(parent: int, name: str) -> tuple[tuple[int, ...], int, s
     return _stat_identity(before), before.st_size, digest.hexdigest()
 
 
-def _scan_tree(root: int) -> tuple[list[tuple[str, int, str]], list[str]]:
+def _scan_tree(root: int) -> list[tuple[str, str, int, str]]:
     root_info = os.fstat(root)
     if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
         raise ValueError("tree root must be a non-symlink directory")
-    records: list[tuple[str, int, str]] = []
-    directories: list[str] = []
+    records: list[tuple[str, str, int, str]] = []
     seen: set[str] = set()
 
     def visit(directory: int, prefix: str = "") -> None:
@@ -430,7 +429,7 @@ def _scan_tree(root: int) -> tuple[list[tuple[str, int, str]], list[str]]:
             if stat.S_ISLNK(info.st_mode):
                 raise ValueError("tree must not contain symlinks")
             if stat.S_ISDIR(info.st_mode):
-                directories.append(relative)
+                records.append(("directory", relative, 0, ""))
                 child = os.open(
                     entry.name,
                     os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
@@ -444,12 +443,12 @@ def _scan_tree(root: int) -> tuple[list[tuple[str, int, str]], list[str]]:
                     os.close(child)
             elif stat.S_ISREG(info.st_mode):
                 _, size, checksum = _bound_file_hash_at(directory, entry.name)
-                records.append((relative, size, checksum))
+                records.append(("file", relative, size, checksum))
             else:
                 raise ValueError("tree must contain only directories and regular files")
 
     visit(root)
-    return sorted(records), sorted(directories)
+    return sorted(records, key=lambda record: record[1])
 
 
 def fingerprint_input(
@@ -478,7 +477,7 @@ def fingerprint_input(
             first, second = _scan_tree(tree), _scan_tree(tree)
             if first != second:
                 raise RuntimeError("tree changed while fingerprinting")
-            canonical = json.dumps(first[0], ensure_ascii=False, separators=(",", ":")).encode()
+            canonical = json.dumps(first, ensure_ascii=False, separators=(",", ":")).encode()
             checksum = hashlib.sha256(canonical).hexdigest()
         finally:
             os.close(tree)
@@ -494,7 +493,7 @@ def fingerprint_input(
     return {"role": role, "path": relative, "kind": kind, "sha256": checksum}
 
 
-def artifact_record(role: str, path: str | Path, state_dir: str | Path) -> dict[str, str]:
+def artifact_record(role: str, path: str | Path, state_dir: str | Path) -> dict[str, str | int]:
     """为 run state 内的常规文件生成可校验的 artifact 记录。"""
 
     if not isinstance(role, str) or _RUN_ID_RE.fullmatch(role) is None:
@@ -502,7 +501,7 @@ def artifact_record(role: str, path: str | Path, state_dir: str | Path) -> dict[
     _, relative = _confined_path(path, state_dir)
     parent, name = _open_parent(state_dir, relative)
     try:
-        identity, _, checksum = _bound_file_hash_at(parent, name)
+        identity, size, checksum = _bound_file_hash_at(parent, name)
     finally:
         os.close(parent)
     verify_parent, verify_name = _open_parent(state_dir, relative)
@@ -512,7 +511,7 @@ def artifact_record(role: str, path: str | Path, state_dir: str | Path) -> dict[
         os.close(verify_parent)
     if _stat_identity(verify) != identity:
         raise RuntimeError("artifact path changed while fingerprinting")
-    return {"role": role, "path": relative, "sha256": checksum}
+    return {"role": role, "path": relative, "size": size, "sha256": checksum}
 
 
 def atomic_write_json(path: str | Path, payload: Mapping[str, Any], *, overwrite: bool = False) -> None:
@@ -609,7 +608,7 @@ def _validate_records(records: list[Any], label: str, *, require_kind: bool) -> 
     for index, record in enumerate(records):
         if not isinstance(record, Mapping):
             raise ValueError(f"manifest {label}[{index}] must be an object")
-        if record.keys() != ({"role", "path", "sha256", "kind"} if require_kind else {"role", "path", "sha256"}):
+        if record.keys() != ({"role", "path", "sha256", "kind"} if require_kind else {"role", "path", "size", "sha256"}):
             raise ValueError(f"manifest {label}[{index}] has missing or unknown keys")
         role, checksum = record.get("role"), record.get("sha256")
         if not isinstance(role, str) or _RUN_ID_RE.fullmatch(role) is None or role in roles:
@@ -619,6 +618,8 @@ def _validate_records(records: list[Any], label: str, *, require_kind: bool) -> 
             raise ValueError(f"manifest {label} paths must be unique")
         if require_kind and record.get("kind") not in {"file", "tree"}:
             raise ValueError(f"manifest {label}[{index}].kind must be file or tree")
+        if not require_kind and (type(record.get("size")) is not int or record["size"] < 0):
+            raise ValueError(f"manifest {label}[{index}].size must be a non-negative integer")
         if not isinstance(checksum, str) or _SHA256_RE.fullmatch(checksum) is None:
             raise ValueError(f"manifest {label}[{index}].sha256 must be 64 hexadecimal characters")
         roles.add(role)
@@ -637,24 +638,24 @@ def _validate_runtime_provenance(runtime: dict[str, Any]) -> None:
         raise ValueError("manifest runtime_provenance packages must map non-empty strings to strings")
     if "r_environment" in runtime:
         environment = runtime["r_environment"]
-        if not isinstance(environment, dict):
-            raise ValueError("manifest r_environment must be an object")
-        available = environment.get("available")
-        expected = {"available", "version", "packages"} if available is True else {
-            "available", "version", "packages", "error"
-        }
-        if (environment.keys() != expected or type(available) is not bool or
-                not isinstance(environment.get("version"), str) or not environment["version"] or
-                len(environment["version"]) > 128 or
-                _VERSION_RE.fullmatch(environment["version"]) is None or
-                not isinstance(environment.get("packages"), dict) or
-                any(not isinstance(key, str) or not key or not isinstance(value, str) or not value or
-                    len(value) > 128 or value != "unavailable" and _VERSION_RE.fullmatch(value) is None
-                    for key, value in environment["packages"].items()) or
-                (available is False and (environment["version"] != "unavailable" or
-                 not isinstance(environment.get("error"), str) or not environment["error"] or
-                 len(environment["error"]) > 256 or
-                 any(ord(char) < 32 for char in environment["error"])))):
+        available = environment.get("available") if isinstance(environment, dict) else None
+        packages = environment.get("packages") if isinstance(environment, dict) else None
+        common = (type(available) is bool and isinstance(packages, dict) and
+                  all(isinstance(key, str) and _R_PACKAGE_RE.fullmatch(key) and isinstance(value, str)
+                      for key, value in packages.items()))
+        if available is True:
+            valid = (environment.keys() == {"available", "version", "packages"} and common and
+                     isinstance(environment.get("version"), str) and
+                     _VERSION_RE.fullmatch(environment["version"]) is not None and
+                     all(value == "unavailable" or _VERSION_RE.fullmatch(value) for value in packages.values()))
+        else:
+            error = environment.get("error") if isinstance(environment, dict) else None
+            valid = (isinstance(environment, dict) and environment.keys() == {"available", "version", "packages", "error"} and common and
+                     available is False and environment.get("version") == "unavailable" and
+                     all(value == "unavailable" for value in packages.values()) and
+                     isinstance(error, str) and error.strip() and len(error) <= 256 and
+                     not any(ord(char) < 32 for char in error))
+        if not valid:
             raise ValueError("manifest r_environment has invalid availability fields")
     optional = ("git_dirty", "git_tracked_dirty")
     if any(value is not None and type(value) is not bool for value in (runtime[key] for key in optional)):
