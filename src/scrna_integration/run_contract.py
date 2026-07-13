@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
+import math
 import os
 import platform
 import re
@@ -12,8 +13,10 @@ import subprocess
 import sys
 import tempfile
 import types
+import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -260,6 +263,12 @@ class RunPaths:
 
 _RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 _SHA256_RE = re.compile(r"[0-9a-fA-F]{64}\Z")
+_GIT_COMMIT_RE = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})\Z")
+_RFC3339_UTC_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\Z")
+MANIFEST_SCHEMA_VERSION = "1"
+MAX_MANIFEST_FAILURE_BYTES = 16_384
+_RUNTIME_PROVENANCE_KEYS = frozenset("python platform git_available git_commit git_dirty git_status_sha256 git_untracked_count git_tracked_dirty git_tracked_diff_sha256 packages".split())
+_MANIFEST_COMMON_KEYS = frozenset("schema_version run_id stage stage_status started_at completed_at inputs effective_parameters runtime_provenance method_status hard_postconditions warnings artifacts".split())
 
 
 def prepare_run(root: str | Path, run_id: str) -> RunPaths:
@@ -333,6 +342,225 @@ def _resolve_manifest_file(manifest_path: str | Path) -> Path:
     state_dir = candidate.parent
     _reject_run_state_symlinks(state_dir.parent, state_dir, candidate)
     return candidate.resolve()
+
+
+def _valid_warning_acceptance(value: Any) -> bool:
+    return isinstance(value, Mapping) and value.keys() == {"accepted_by", "accepted_at"} and all(isinstance(value.get(field), str) and value[field].strip() for field in ("accepted_by", "accepted_at"))
+
+
+def _required_container(manifest: Mapping[str, Any], key: str, expected: type) -> Any:
+    value = manifest.get(key)
+    if not isinstance(value, expected):
+        raise ValueError(f"manifest {key} must be a {expected.__name__}")
+    return value
+
+
+def _validate_json_value(value: Any, label: str) -> None:
+    if value is None or isinstance(value, (str, int, bool)):
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"{label} must not contain NaN or infinity")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _validate_json_value(item, f"{label}[{index}]")
+    elif isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise ValueError(f"{label} object keys must be strings")
+        for key, item in value.items():
+            _validate_json_value(item, f"{label}.{key}")
+    else:
+        raise ValueError(f"{label} contains non-JSON value {type(value).__name__}")
+
+
+def _safe_relative_path(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value or "\\" in value:
+        raise ValueError(f"{label} must be a safe relative path")
+    path = Path(value)
+    if (not path.name or path.is_absolute() or ".." in path.parts or re.match(r"[A-Za-z]:", value) or
+            any(ord(char) < 32 or ord(char) == 127 for char in value)):
+        raise ValueError(f"{label} must be a safe relative path")
+    return path.as_posix()
+
+
+def _validate_records(records: list[Any], label: str, *, require_kind: bool) -> set[str]:
+    roles, paths = set(), set()
+    for index, record in enumerate(records):
+        if not isinstance(record, Mapping):
+            raise ValueError(f"manifest {label}[{index}] must be an object")
+        if record.keys() != ({"role", "path", "sha256", "kind"} if require_kind else {"role", "path", "sha256"}):
+            raise ValueError(f"manifest {label}[{index}] has missing or unknown keys")
+        role, checksum = record.get("role"), record.get("sha256")
+        if not isinstance(role, str) or _RUN_ID_RE.fullmatch(role) is None or role in roles:
+            raise ValueError(f"manifest {label} roles must be unique safe identifiers")
+        path = _safe_relative_path(record.get("path"), f"manifest {label}[{index}].path")
+        if path in paths:
+            raise ValueError(f"manifest {label} paths must be unique")
+        if require_kind and record.get("kind") not in {"file", "tree"}:
+            raise ValueError(f"manifest {label}[{index}].kind must be file or tree")
+        if not isinstance(checksum, str) or _SHA256_RE.fullmatch(checksum) is None:
+            raise ValueError(f"manifest {label}[{index}].sha256 must be 64 hexadecimal characters")
+        roles.add(role)
+        paths.add(path)
+    return paths
+
+
+def _validate_runtime_provenance(runtime: dict[str, Any]) -> None:
+    if runtime.keys() != _RUNTIME_PROVENANCE_KEYS:
+        raise ValueError("manifest runtime_provenance must use the exact collector keys")
+    if (not all(isinstance(runtime[key], str) and runtime[key] for key in ("python", "platform", "git_commit")) or
+            type(runtime["git_available"]) is not bool or not isinstance(runtime["packages"], dict)):
+        raise ValueError("manifest runtime_provenance has invalid minimum field types")
+    packages = runtime["packages"]
+    if any(not isinstance(key, str) or not key or not isinstance(value, str) or not value for key, value in packages.items()):
+        raise ValueError("manifest runtime_provenance packages must map non-empty strings to strings")
+    optional = ("git_dirty", "git_tracked_dirty")
+    if any(value is not None and type(value) is not bool for value in (runtime[key] for key in optional)):
+        raise ValueError("manifest runtime_provenance dirty fields must be booleans or null")
+    count = runtime["git_untracked_count"]
+    if count is not None and (type(count) is not int or count < 0):
+        raise ValueError("manifest git_untracked_count must be a non-negative integer or null")
+    if runtime["git_available"]:
+        if (_GIT_COMMIT_RE.fullmatch(runtime["git_commit"]) is None or count is None or
+                any(runtime[key] is None for key in optional)):
+            raise ValueError("available Git provenance requires commit, booleans, and count")
+        for dirty_key, hash_key in (("git_dirty", "git_status_sha256"),
+                                    ("git_tracked_dirty", "git_tracked_diff_sha256")):
+            digest = runtime[hash_key]
+            if (runtime[dirty_key] and (not isinstance(digest, str) or _SHA256_RE.fullmatch(digest) is None) or
+                    not runtime[dirty_key] and digest is not None):
+                raise ValueError(f"manifest {hash_key} does not match {dirty_key}")
+    elif (runtime["git_commit"] != "unavailable" or count is not None or
+          any(runtime[key] is not None for key in (*optional, "git_status_sha256", "git_tracked_diff_sha256"))):
+        raise ValueError("unavailable Git provenance must use unavailable/null fields")
+
+
+def _utc_timestamp(manifest: Mapping[str, Any], key: str) -> datetime:
+    value = manifest.get(key)
+    if not isinstance(value, str) or _RFC3339_UTC_RE.fullmatch(value) is None:
+        raise ValueError(f"manifest {key} must be an RFC3339 UTC-Z timestamp")
+    return datetime.fromisoformat(value[:-1] + "+00:00")
+
+
+def validate_manifest(manifest_path_or_mapping: str | Path | Mapping[str, Any], *, allow_legacy: bool = False,
+                      state: str | None = None, expected_run_id: str | None = None) -> dict[str, Any]:
+    """严格校验 v1 manifest；legacy 仅能经显式临时兼容开关进入。"""
+
+    file_context = not isinstance(manifest_path_or_mapping, Mapping)
+    if not file_context:
+        manifest = dict(manifest_path_or_mapping)
+        if state is None:
+            raise ValueError("state is required when validating a manifest mapping")
+    else:
+        manifest_file = _resolve_manifest_file(manifest_path_or_mapping)
+        if manifest_file.name != "manifest.json" or manifest_file.parent.name not in {"draft", "promoted"}:
+            raise ValueError("manifest path must be <run_id>/<draft|promoted>/manifest.json")
+        inferred_state, inferred_run_id = manifest_file.parent.name, manifest_file.parent.parent.name
+        if state is not None and state != inferred_state:
+            raise ValueError("manifest state does not match path context")
+        if expected_run_id is not None and expected_run_id != inferred_run_id:
+            raise ValueError("expected run_id does not match path context")
+        state, expected_run_id = inferred_state, inferred_run_id
+        manifest = _load_manifest(manifest_file)
+    if state not in {"draft", "promoted"}:
+        raise ValueError("manifest state must be draft or promoted")
+    if "schema_version" not in manifest:
+        if allow_legacy:
+            warnings.warn("legacy manifest compatibility is temporary; migrate to schema v1",
+                          DeprecationWarning, stacklevel=2)
+            return manifest
+        raise ValueError("manifest schema_version is required")
+    if manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION:
+        raise ValueError(f"manifest schema_version must be {MANIFEST_SCHEMA_VERSION!r}")
+    _validate_json_value(manifest, "manifest")
+    run_id, stage = manifest.get("run_id"), manifest.get("stage")
+    if not isinstance(run_id, str) or _RUN_ID_RE.fullmatch(run_id) is None:
+        raise ValueError("manifest run_id must be a safe ASCII identifier")
+    if expected_run_id is not None and run_id != expected_run_id:
+        raise ValueError("manifest run_id does not match path context")
+    if not isinstance(stage, str) or _RUN_ID_RE.fullmatch(stage) is None:
+        raise ValueError("manifest stage must be a safe ASCII identifier")
+    status_value = manifest.get("stage_status")
+    try:
+        status = StageStatus(status_value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"invalid manifest stage_status: {status_value!r}") from error
+    required_keys = _MANIFEST_COMMON_KEYS | ({"failure"} if status is StageStatus.FAILED else {"checkpoint"})
+    allowed_keys = required_keys | ({"warning_acceptance"} if status is StageStatus.SUCCESS_WITH_WARNINGS else set())
+    if not required_keys <= manifest.keys() or manifest.keys() - allowed_keys:
+        raise ValueError("manifest has missing, unknown, or status-forbidden top-level keys")
+    started, completed = _utc_timestamp(manifest, "started_at"), _utc_timestamp(manifest, "completed_at")
+    if completed < started:
+        raise ValueError("manifest completed_at must not precede started_at")
+    inputs = _required_container(manifest, "inputs", list)
+    if not inputs:
+        raise ValueError("manifest inputs must be non-empty")
+    _validate_records(inputs, "inputs", require_kind=True)
+    _required_container(manifest, "effective_parameters", dict)
+    runtime = _required_container(manifest, "runtime_provenance", dict)
+    _validate_runtime_provenance(runtime)
+    methods = _required_container(manifest, "method_status", dict)
+    if not methods or any(not isinstance(key, str) or not key or not isinstance(value, str) or not value
+                          for key, value in methods.items()):
+        raise ValueError("manifest method_status must be a non-empty string mapping")
+    try:
+        [MethodStatus(value) for value in methods.values()]
+    except ValueError as error:
+        raise ValueError("manifest method_status values must use MethodStatus") from error
+    postconditions = _required_container(manifest, "hard_postconditions", dict)
+    if not postconditions or any(not isinstance(key, str) or not key or not isinstance(value, bool)
+                                 for key, value in postconditions.items()):
+        raise ValueError("manifest hard_postconditions must be a non-empty boolean mapping")
+    warnings_value = _required_container(manifest, "warnings", list)
+    if (any(not isinstance(item, str) or not item.strip() for item in warnings_value) or
+            len(warnings_value) != len(set(warnings_value))):
+        raise ValueError("manifest warnings must contain unique non-empty strings")
+    artifacts = _required_container(manifest, "artifacts", list)
+    artifact_paths = _validate_records(artifacts, "artifacts", require_kind=False)
+    if status is StageStatus.FAILED:
+        if state != "draft":
+            raise ValueError("FAILED manifest must remain draft")
+        if "checkpoint" in manifest:
+            raise ValueError("FAILED manifest must not declare a checkpoint")
+        failure = manifest.get("failure")
+        if not isinstance(failure, Mapping) or not failure:
+            raise ValueError("FAILED manifest requires a non-empty failure object")
+        try:
+            failure_size = len(json.dumps(failure, ensure_ascii=False, allow_nan=False).encode())
+        except (TypeError, ValueError) as error:
+            raise ValueError("manifest failure must be finite JSON data") from error
+        if failure_size > MAX_MANIFEST_FAILURE_BYTES:
+            raise ValueError("manifest failure exceeds the size limit")
+    else:
+        checkpoint = manifest.get("checkpoint")
+        if not isinstance(checkpoint, Mapping) or checkpoint.keys() != {"path", "sha256"}:
+            raise ValueError("non-FAILED manifest requires a non-empty checkpoint object")
+        checkpoint_path = _safe_relative_path(checkpoint.get("path"), "manifest checkpoint.path")
+        checksum = checkpoint.get("sha256")
+        if not isinstance(checksum, str) or _SHA256_RE.fullmatch(checksum) is None:
+            raise ValueError("manifest checkpoint.sha256 must be 64 hexadecimal characters")
+        if checkpoint_path in artifact_paths:
+            raise ValueError("manifest checkpoint and artifact paths must be disjoint")
+    if status is StageStatus.NEEDS_REVIEW and state != "draft":
+        raise ValueError("NEEDS_REVIEW manifest must remain draft")
+    acceptance = manifest.get("warning_acceptance")
+    if acceptance is not None and not _valid_warning_acceptance(acceptance):
+        raise ValueError("warning_acceptance requires accepted_by and accepted_at")
+    if status is StageStatus.SUCCESS:
+        if warnings_value or acceptance is not None:
+            raise ValueError("SUCCESS manifest must have no warnings or warning_acceptance")
+    elif status is StageStatus.SUCCESS_WITH_WARNINGS:
+        if not warnings_value:
+            raise ValueError("SUCCESS_WITH_WARNINGS requires non-empty warnings")
+        if state == "promoted" and not _valid_warning_acceptance(acceptance):
+            raise ValueError("promoted warnings require warning_acceptance")
+    elif acceptance is not None:
+        raise ValueError(f"{status.value} manifest must not declare warning_acceptance")
+    if acceptance is not None:
+        accepted_at = _utc_timestamp(acceptance, "accepted_at")
+        if accepted_at < completed:
+            raise ValueError("warning accepted_at must not precede completed_at")
+    return manifest
 
 
 def _validate_declared_artifacts(
@@ -434,13 +662,6 @@ def resume_run(root: str | Path, run_id: str, *, promoted: bool = False) -> RunP
         raise ValueError("manifest run_id does not match run paths")
     validate_checkpoint(manifest_path)
     return paths
-
-
-def _valid_warning_acceptance(value: Any) -> bool:
-    return isinstance(value, Mapping) and all(
-        isinstance(value.get(field), str) and value[field].strip()
-        for field in ("accepted_by", "accepted_at")
-    )
 
 
 def promote_run(paths: RunPaths, *, warning_acceptance: Mapping[str, str] | None = None) -> Path:
