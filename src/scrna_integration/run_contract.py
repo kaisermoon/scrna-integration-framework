@@ -646,8 +646,8 @@ def _validate_runtime_provenance(runtime: dict[str, Any]) -> None:
         if available is True:
             valid = (environment.keys() == {"available", "version", "packages"} and common and
                      isinstance(environment.get("version"), str) and
-                     _VERSION_RE.fullmatch(environment["version"]) is not None and
-                     all(value == "unavailable" or _VERSION_RE.fullmatch(value) for value in packages.values()))
+                     len(environment["version"]) <= 128 and _VERSION_RE.fullmatch(environment["version"]) is not None and
+                     all(len(value) <= 128 and (value == "unavailable" or _VERSION_RE.fullmatch(value)) for value in packages.values()))
         else:
             error = environment.get("error") if isinstance(environment, dict) else None
             valid = (isinstance(environment, dict) and environment.keys() == {"available", "version", "packages", "error"} and common and

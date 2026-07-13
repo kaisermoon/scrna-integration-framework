@@ -171,7 +171,7 @@ def test_path_context_is_strict(tmp_path: Path) -> None:
 def test_runtime_provenance_accepts_strict_r_environment(monkeypatch) -> None:
     manifest = _manifest()
     manifest["runtime_provenance"]["r_environment"] = {
-        "available": True, "version": "4.4.1", "packages": {"Seurat": "5.1.0"},
+        "available": True, "version": "1" * 128, "packages": {"Seurat": "1" * 128},
     }
     assert validate_manifest(manifest, state="draft")["runtime_provenance"]["r_environment"]["available"]
     manifest["runtime_provenance"]["r_environment"]["error"] = "forbidden"
@@ -185,9 +185,11 @@ def test_runtime_provenance_accepts_strict_r_environment(monkeypatch) -> None:
 
 @pytest.mark.parametrize("environment", [
     {"available": True, "version": "4.4.1", "packages": {"bad key": "1.0"}},
-    {"available": True, "version": "4.4.1", "packages": {1: "1.0"}},
-    {"available": True, "version": "4.4.1", "packages": {"Seurat": "bad"}},
     {"available": False, "version": "unavailable", "packages": {"Seurat": "1.0"}, "error": "missing"},
+    {"available": True, "version": "1" * 129, "packages": {"Seurat": "1.0"}},
+    {"available": True, "version": "4.4.1", "packages": {"Seurat": "1" * 129}},
+    {"available": True, "version": "1" * 10_000, "packages": {"Seurat": "1.0"}},
+    {"available": True, "version": "4.4.1", "packages": {"Seurat": "1" * 10_000}},
 ])
 def test_r_environment_rejects_malformed_package_keys_and_values(environment) -> None:
     manifest = _manifest()
