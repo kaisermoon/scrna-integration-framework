@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import subprocess
+import sys
+from enum import Enum
 from pathlib import Path
 
 import pytest
@@ -9,15 +14,224 @@ from scrna_integration.run_contract import (
     MethodStatus,
     StageStatus,
     atomic_write_json,
+    collect_runtime_provenance,
     determine_stage_status,
     prepare_run,
     promote_run,
+    publish_compatibility_symlink,
     resume_run,
     sha256_file,
+    snapshot_effective_parameters,
     validate_checkpoint,
 )
 
 ACCEPTANCE = {"accepted_by": "researcher", "accepted_at": "2026-07-13T12:00:00Z"}
+
+
+class _Choice(Enum):
+    FIRST = "first"
+
+
+class _Scalar:
+    def item(self):
+        return 3
+
+
+def test_snapshot_effective_parameters_normalizes_and_sorts(tmp_path: Path) -> None:
+    namespace = {
+        "ZETA": (_Choice.FIRST, tmp_path / "input.h5ad"),
+        "ALPHA": {"nested": [_Scalar(), True]},
+        "lowercase": "ignored",
+        "RUNTIME": os,
+    }
+
+    assert snapshot_effective_parameters(namespace, path_root=tmp_path) == {
+        "ALPHA": {"nested": [3, True]},
+        "ZETA": ["first", "input.h5ad"],
+    }
+
+
+def test_snapshot_effective_parameters_redacts_secrets_and_honors_exclude() -> None:
+    params = snapshot_effective_parameters(
+        {
+            "OPENAI_API_KEY": object(),
+            "OPENAI_KEY": "secret",
+            "API_TOKEN": "token-value",
+            "PRIVATE_KEY": "secret",
+            "AWS_ACCESS_KEY_ID": "secret",
+            "AUTH_HEADER": "secret",
+            "ACCESS_TOKEN": "token-value",
+            "PASSWORD_FILE": Path("secret.txt"),
+            "CREDENTIAL": {"raw": "secret"},
+            "BATCH_KEY": "batch",
+            "LABEL_KEY": "cell_type",
+            "GROUP_KEY": "sample",
+            "VISIBLE": 1,
+            "OMITTED": 2,
+        },
+        exclude=("OMITTED",),
+    )
+
+    assert params == {
+        "ACCESS_TOKEN": "<redacted>",
+        "API_TOKEN": "<redacted>",
+        "AUTH_HEADER": "<redacted>",
+        "AWS_ACCESS_KEY_ID": "<redacted>",
+        "BATCH_KEY": "batch",
+        "CREDENTIAL": "<redacted>",
+        "GROUP_KEY": "sample",
+        "LABEL_KEY": "cell_type",
+        "OPENAI_API_KEY": "<redacted>",
+        "OPENAI_KEY": "<redacted>",
+        "PASSWORD_FILE": "<redacted>",
+        "PRIVATE_KEY": "<redacted>",
+        "VISIBLE": 1,
+    }
+
+
+def test_snapshot_effective_parameters_hides_absolute_paths(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+
+    assert snapshot_effective_parameters(
+        {
+            "INPUT_PATH": project_root / "data" / "input.h5ad",
+            "RSCRIPT_BIN": str(tmp_path / "external" / "Rscript"),
+        },
+        path_root=project_root,
+    ) == {
+        "INPUT_PATH": "data/input.h5ad",
+        "RSCRIPT_BIN": "<external>/Rscript",
+    }
+
+
+def test_snapshot_effective_parameters_rejects_unsupported_value() -> None:
+    with pytest.raises(TypeError, match="UNSUPPORTED"):
+        snapshot_effective_parameters({"UNSUPPORTED": {1, 2}})
+
+
+def _init_git_repo(path: Path) -> Path:
+    tracked = path / "tracked.txt"
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    for key, value in (("user.email", "test@example.org"), ("user.name", "Test")):
+        subprocess.run(["git", "-C", str(path), "config", key, value], check=True)
+    tracked.write_text("before", encoding="utf-8")
+    subprocess.run(["git", "-C", str(path), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(path), "commit", "-qm", "test"], check=True)
+    return tracked
+
+
+def test_collect_runtime_provenance_records_git_and_packages(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    expected_commit = subprocess.check_output(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"], text=True
+    ).strip()
+
+    provenance = collect_runtime_provenance(tmp_path, ("pytest", "definitely-missing-package"))
+
+    assert provenance["python"] == sys.version.split()[0]
+    assert provenance["platform"]
+    assert provenance["git_commit"] == expected_commit
+    assert provenance["git_available"] is True
+    assert provenance["git_dirty"] is False
+    assert provenance["git_status_sha256"] is None
+    assert provenance["git_untracked_count"] == 0
+    assert provenance["git_tracked_dirty"] is False
+    assert provenance["git_tracked_diff_sha256"] is None
+    assert provenance["packages"]["pytest"] != "unavailable"
+    assert provenance["packages"]["definitely-missing-package"] == "unavailable"
+
+
+def test_collect_runtime_provenance_marks_git_unavailable(tmp_path: Path) -> None:
+    provenance = collect_runtime_provenance(tmp_path)
+    assert provenance["git_available"] is False
+    assert provenance["git_commit"] == "unavailable"
+    unavailable = (
+        "git_dirty", "git_status_sha256", "git_untracked_count",
+        "git_tracked_dirty", "git_tracked_diff_sha256",
+    )
+    assert all(provenance[key] is None for key in unavailable)
+
+
+def test_collect_runtime_provenance_hashes_tracked_diff(tmp_path: Path) -> None:
+    tracked = _init_git_repo(tmp_path)
+    tracked.write_text("after", encoding="utf-8")
+    expected_diff = subprocess.check_output(
+        ["git", "-C", str(tmp_path), "diff", "--binary", "HEAD"]
+    )
+
+    provenance = collect_runtime_provenance(tmp_path)
+    assert provenance["git_dirty"] is True
+    assert provenance["git_tracked_dirty"] is True
+    assert provenance["git_tracked_diff_sha256"] == hashlib.sha256(expected_diff).hexdigest()
+
+
+def test_collect_runtime_provenance_includes_untracked_files(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    (tmp_path / "untracked.txt").write_text("new", encoding="utf-8")
+    status = subprocess.check_output(
+        ["git", "-C", str(tmp_path), "status", "--porcelain=v1", "--untracked-files=all", "-z"]
+    )
+
+    provenance = collect_runtime_provenance(tmp_path)
+    assert provenance["git_dirty"] is True
+    assert provenance["git_status_sha256"] == hashlib.sha256(status).hexdigest()
+    assert provenance["git_untracked_count"] == 1
+    assert provenance["git_tracked_dirty"] is False
+
+
+def test_publish_compatibility_symlink_creates_and_reuses_relative_link(tmp_path: Path) -> None:
+    target_one = tmp_path / "runs" / "one.h5ad"
+    target_two = tmp_path / "runs" / "two.h5ad"
+    target_one.parent.mkdir()
+    target_one.write_text("one", encoding="utf-8")
+    target_two.write_text("two", encoding="utf-8")
+    link = tmp_path / "latest.h5ad"
+
+    publish_compatibility_symlink(link, target_one)
+    assert link.is_symlink()
+    assert not os.readlink(link).startswith("/")
+    assert link.resolve() == target_one.resolve()
+
+    assert publish_compatibility_symlink(link, target_one) == link
+    with pytest.raises(FileExistsError):
+        publish_compatibility_symlink(link, target_two)
+    assert link.resolve() == target_one.resolve()
+
+
+def test_publish_compatibility_symlink_rejects_real_file_and_missing_target(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target.h5ad"
+    target.write_text("target", encoding="utf-8")
+    real_file = tmp_path / "latest.h5ad"
+    real_file.write_text("do not replace", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        publish_compatibility_symlink(real_file, target)
+    with pytest.raises(FileNotFoundError):
+        publish_compatibility_symlink(tmp_path / "missing-link", tmp_path / "missing-target")
+
+    assert real_file.read_text(encoding="utf-8") == "do not replace"
+
+
+def test_publish_compatibility_symlink_does_not_overwrite_concurrent_entry(
+    monkeypatch, tmp_path: Path
+) -> None:
+    target = tmp_path / "target.h5ad"
+    target.write_text("target", encoding="utf-8")
+
+    link = tmp_path / "latest.h5ad"
+
+    def competing_create(self, target, *args, **kwargs):
+        self.write_text("concurrent", encoding="utf-8")
+        raise FileExistsError(self)
+
+    monkeypatch.setattr(Path, "symlink_to", competing_create)
+    with pytest.raises(FileExistsError):
+        publish_compatibility_symlink(link, target)
+
+    assert link.read_text(encoding="utf-8") == "concurrent"
 
 
 @pytest.mark.parametrize(

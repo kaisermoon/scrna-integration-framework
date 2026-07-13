@@ -3,15 +3,195 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import os
+import platform
 import re
+import subprocess
+import sys
 import tempfile
+import types
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
+_REDACTED = "<redacted>"
+_SENSITIVE_PARAMETER_TOKENS = {"TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "CREDENTIALS"}
+_RESEARCH_KEY_ALLOWLIST = frozenset(
+    "BATCH_KEY CELL_TYPE_KEY CLUSTER_KEY DISEASE_KEY DONOR_KEY GROUP_KEY HVG_KEY LABEL_KEY SAMPLE_KEY".split()
+)
+
+
+def _is_sensitive_parameter_name(name: str) -> bool:
+    if name in _RESEARCH_KEY_ALLOWLIST:
+        return False
+    tokens = name.upper().split("_")
+    if any(token in _SENSITIVE_PARAMETER_TOKENS for token in tokens):
+        return True
+    sensitive_pairs = {("ACCESS", "KEY"), ("API", "KEY"), ("AUTH", "HEADER"), ("PRIVATE", "KEY")}
+    return name.endswith("_KEY") or any(
+        (left, right) in sensitive_pairs for left, right in zip(tokens, tokens[1:], strict=False)
+    )
+
+
+def _safe_parameter_path(value: str | Path, *, path_root: Path | None) -> str:
+    path = Path(value)
+    if not path.is_absolute():
+        return path.as_posix() if isinstance(value, Path) else value
+    absolute = path.resolve()
+    if path_root is not None and absolute.is_relative_to(path_root):
+        return absolute.relative_to(path_root).as_posix()
+    return f"<external>/{absolute.name}"
+
+
+def _json_parameter_value(
+    value: Any, *, parameter_name: str, path_root: Path | None
+) -> Any:
+    if isinstance(value, Enum):
+        return _json_parameter_value(value.value, parameter_name=parameter_name, path_root=path_root)
+    if isinstance(value, str):
+        return _safe_parameter_path(value, path_root=path_root)
+    if value is None or isinstance(value, (int, bool)):
+        return value
+    if isinstance(value, float):
+        try:
+            json.dumps(value, allow_nan=False)
+        except ValueError as error:
+            raise TypeError(f"parameter {parameter_name} is not JSON serializable") from error
+        return value
+    if isinstance(value, Path):
+        return _safe_parameter_path(value, path_root=path_root)
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise TypeError(f"parameter {parameter_name} has a non-string mapping key")
+        return {
+            key: _json_parameter_value(
+                value[key], parameter_name=parameter_name, path_root=path_root
+            )
+            for key in sorted(value)
+        }
+    if isinstance(value, (tuple, list)):
+        return [
+            _json_parameter_value(item, parameter_name=parameter_name, path_root=path_root)
+            for item in value
+        ]
+    item_method = getattr(value, "item", None)
+    if callable(item_method):
+        try:
+            scalar = item_method()
+        except Exception as error:
+            raise TypeError(
+                f"parameter {parameter_name} has an unusable scalar value"
+            ) from error
+        if scalar is not value:
+            return _json_parameter_value(scalar, parameter_name=parameter_name, path_root=path_root)
+    raise TypeError(
+        f"parameter {parameter_name} has unsupported value type {type(value).__name__}"
+    )
+
+
+def snapshot_effective_parameters(
+    namespace: Mapping[str, Any], exclude: Sequence[str] = (), *, path_root: str | Path | None = None
+) -> dict[str, Any]:
+    """捕获 notebook 中公开的大写参数，并生成稳定、脱敏的 JSON 数据。"""
+
+    excluded = set(exclude)
+    root = Path(path_root).resolve() if path_root is not None else None
+    snapshot: dict[str, Any] = {}
+    for name in sorted(namespace):
+        if not isinstance(name, str) or name in excluded or name.startswith("_") or not name.isupper():
+            continue
+        if _is_sensitive_parameter_name(name):
+            snapshot[name] = _REDACTED
+            continue
+        value = namespace[name]
+        if isinstance(value, types.ModuleType) or isinstance(value, type) or callable(value):
+            continue
+        snapshot[name] = _json_parameter_value(value, parameter_name=name, path_root=root)
+    return snapshot
+
+
+def collect_runtime_provenance(
+    project_root: str | Path, package_names: Sequence[str] = ()
+) -> dict[str, Any]:
+    """采集可复现运行所需的解释器、平台、Git 与包版本事实。"""
+
+    root = Path(project_root).resolve()
+    try:
+        git_commit = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+        git_diff = subprocess.run(
+            ["git", "-C", str(root), "diff", "--binary", "HEAD"],
+            check=True,
+            capture_output=True,
+            timeout=10,
+        ).stdout
+        git_status = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain=v1", "--untracked-files=all", "-z"],
+            check=True,
+            capture_output=True,
+            timeout=10,
+        ).stdout
+        git_available = True
+        git_dirty: bool | None = bool(git_status)
+        git_status_sha256 = hashlib.sha256(git_status).hexdigest() if git_status else None
+        git_untracked_count = sum(record.startswith(b"?? ") for record in git_status.split(b"\0"))
+        git_tracked_dirty: bool | None = bool(git_diff)
+        git_tracked_diff_sha256 = hashlib.sha256(git_diff).hexdigest() if git_diff else None
+    except (FileNotFoundError, subprocess.SubprocessError):
+        git_available = False
+        git_commit = "unavailable"
+        git_dirty = None
+        git_status_sha256 = None
+        git_untracked_count = None
+        git_tracked_dirty = None
+        git_tracked_diff_sha256 = None
+
+    packages: dict[str, str] = {}
+    for name in sorted(set(package_names)):
+        try:
+            packages[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            packages[name] = "unavailable"
+    return {
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "git_available": git_available,
+        "git_commit": git_commit,
+        "git_dirty": git_dirty,
+        "git_status_sha256": git_status_sha256,
+        "git_untracked_count": git_untracked_count,
+        "git_tracked_dirty": git_tracked_dirty,
+        "git_tracked_diff_sha256": git_tracked_diff_sha256,
+        "packages": packages,
+    }
+
+
+def publish_compatibility_symlink(link_path: str | Path, target_path: str | Path) -> Path:
+    """原子创建相对 compatibility symlink，既有目标只允许幂等复用。"""
+
+    link = Path(os.path.abspath(os.fspath(link_path)))
+    target = Path(target_path).resolve()
+    if not target.exists():
+        raise FileNotFoundError(target)
+    if not link.parent.is_dir():
+        raise FileNotFoundError(link.parent)
+    if link.is_symlink():
+        if link.resolve() == target:
+            return link
+        raise FileExistsError(link)
+    if link.exists():
+        raise FileExistsError(link)
+    link.symlink_to(os.path.relpath(target, start=link.parent))
+    return link
 
 
 class MethodStatus(str, Enum):
