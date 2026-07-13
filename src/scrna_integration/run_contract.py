@@ -3,15 +3,146 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import os
+import platform
 import re
+import subprocess
+import sys
 import tempfile
+import types
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
+_REDACTED = "<redacted>"
+_SENSITIVE_PARAMETER_TOKENS = {"TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "CREDENTIALS"}
+
+
+def _is_sensitive_parameter_name(name: str) -> bool:
+    tokens = name.upper().split("_")
+    if any(token in _SENSITIVE_PARAMETER_TOKENS for token in tokens):
+        return True
+    return any(
+        left == "API" and right == "KEY" for left, right in zip(tokens, tokens[1:], strict=False)
+    )
+
+
+def _json_parameter_value(value: Any, *, parameter_name: str) -> Any:
+    if isinstance(value, Enum):
+        return _json_parameter_value(value.value, parameter_name=parameter_name)
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    if isinstance(value, float):
+        try:
+            json.dumps(value, allow_nan=False)
+        except ValueError as error:
+            raise TypeError(f"parameter {parameter_name} is not JSON serializable") from error
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise TypeError(f"parameter {parameter_name} has a non-string mapping key")
+        return {
+            key: _json_parameter_value(value[key], parameter_name=parameter_name)
+            for key in sorted(value)
+        }
+    if isinstance(value, (tuple, list)):
+        return [_json_parameter_value(item, parameter_name=parameter_name) for item in value]
+    item_method = getattr(value, "item", None)
+    if callable(item_method):
+        try:
+            scalar = item_method()
+        except Exception as error:
+            raise TypeError(
+                f"parameter {parameter_name} has an unusable scalar value"
+            ) from error
+        if scalar is not value:
+            return _json_parameter_value(scalar, parameter_name=parameter_name)
+    raise TypeError(
+        f"parameter {parameter_name} has unsupported value type {type(value).__name__}"
+    )
+
+
+def snapshot_effective_parameters(
+    namespace: Mapping[str, Any], exclude: Sequence[str] = ()
+) -> dict[str, Any]:
+    """捕获 notebook 中公开的大写参数，并生成稳定、脱敏的 JSON 数据。"""
+
+    excluded = set(exclude)
+    snapshot: dict[str, Any] = {}
+    for name in sorted(namespace):
+        if not isinstance(name, str) or name in excluded or name.startswith("_") or not name.isupper():
+            continue
+        if _is_sensitive_parameter_name(name):
+            snapshot[name] = _REDACTED
+            continue
+        value = namespace[name]
+        if isinstance(value, types.ModuleType) or isinstance(value, type) or callable(value):
+            continue
+        snapshot[name] = _json_parameter_value(value, parameter_name=name)
+    return snapshot
+
+
+def collect_runtime_provenance(
+    project_root: str | Path, package_names: Sequence[str] = ()
+) -> dict[str, Any]:
+    """采集可复现运行所需的解释器、平台、Git 与包版本事实。"""
+
+    root = Path(project_root).resolve()
+    try:
+        git_commit = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+    except (FileNotFoundError, subprocess.SubprocessError):
+        git_commit = "unavailable"
+
+    packages: dict[str, str] = {}
+    for name in sorted(set(package_names)):
+        try:
+            packages[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            packages[name] = "unavailable"
+    return {
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "git_commit": git_commit,
+        "packages": packages,
+    }
+
+
+def publish_compatibility_symlink(link_path: str | Path, target_path: str | Path) -> Path:
+    """原子发布相对 compatibility symlink，绝不覆盖真实文件。"""
+
+    link = Path(os.path.abspath(os.fspath(link_path)))
+    target = Path(target_path).resolve()
+    if not target.exists():
+        raise FileNotFoundError(target)
+    if not link.parent.is_dir():
+        raise FileNotFoundError(link.parent)
+    if (link.exists() or link.is_symlink()) and not link.is_symlink():
+        raise FileExistsError(link)
+
+    fd, temporary_name = tempfile.mkstemp(
+        dir=link.parent, prefix=f".{link.name}.", suffix=".tmp"
+    )
+    os.close(fd)
+    temporary = Path(temporary_name)
+    temporary.unlink()
+    try:
+        temporary.symlink_to(os.path.relpath(target, start=link.parent))
+        os.replace(temporary, link)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return link
 
 
 class MethodStatus(str, Enum):

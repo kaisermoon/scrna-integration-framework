@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+from enum import Enum
 from pathlib import Path
 
 import pytest
@@ -9,15 +13,150 @@ from scrna_integration.run_contract import (
     MethodStatus,
     StageStatus,
     atomic_write_json,
+    collect_runtime_provenance,
     determine_stage_status,
     prepare_run,
     promote_run,
+    publish_compatibility_symlink,
     resume_run,
     sha256_file,
+    snapshot_effective_parameters,
     validate_checkpoint,
 )
 
 ACCEPTANCE = {"accepted_by": "researcher", "accepted_at": "2026-07-13T12:00:00Z"}
+
+
+class _Choice(Enum):
+    FIRST = "first"
+
+
+class _Scalar:
+    def item(self):
+        return 3
+
+
+def test_snapshot_effective_parameters_normalizes_and_sorts(tmp_path: Path) -> None:
+    namespace = {
+        "ZETA": (_Choice.FIRST, tmp_path / "input.h5ad"),
+        "ALPHA": {"nested": [_Scalar(), True]},
+        "lowercase": "ignored",
+        "RUNTIME": os,
+    }
+
+    assert snapshot_effective_parameters(namespace) == {
+        "ALPHA": {"nested": [3, True]},
+        "ZETA": ["first", str(tmp_path / "input.h5ad")],
+    }
+
+
+def test_snapshot_effective_parameters_redacts_secrets_and_honors_exclude() -> None:
+    params = snapshot_effective_parameters(
+        {
+            "OPENAI_API_KEY": object(),
+            "API_TOKEN": "token-value",
+            "ACCESS_TOKEN": "token-value",
+            "PASSWORD_FILE": Path("secret.txt"),
+            "CREDENTIAL": {"raw": "secret"},
+            "BATCH_KEY": "batch",
+            "LABEL_KEY": "cell_type",
+            "GROUP_KEY": "sample",
+            "VISIBLE": 1,
+            "OMITTED": 2,
+        },
+        exclude=("OMITTED",),
+    )
+
+    assert params == {
+        "ACCESS_TOKEN": "<redacted>",
+        "API_TOKEN": "<redacted>",
+        "BATCH_KEY": "batch",
+        "CREDENTIAL": "<redacted>",
+        "GROUP_KEY": "sample",
+        "LABEL_KEY": "cell_type",
+        "OPENAI_API_KEY": "<redacted>",
+        "PASSWORD_FILE": "<redacted>",
+        "VISIBLE": 1,
+    }
+
+
+def test_snapshot_effective_parameters_rejects_unsupported_value() -> None:
+    with pytest.raises(TypeError, match="UNSUPPORTED"):
+        snapshot_effective_parameters({"UNSUPPORTED": {1, 2}})
+
+
+def test_collect_runtime_provenance_records_git_and_packages(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.org"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    (tmp_path / "tracked.txt").write_text("content", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "test"], check=True)
+    expected_commit = subprocess.check_output(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"], text=True
+    ).strip()
+
+    provenance = collect_runtime_provenance(tmp_path, ("pytest", "definitely-missing-package"))
+
+    assert provenance["python"] == sys.version.split()[0]
+    assert provenance["platform"]
+    assert provenance["git_commit"] == expected_commit
+    assert provenance["packages"]["pytest"] != "unavailable"
+    assert provenance["packages"]["definitely-missing-package"] == "unavailable"
+
+
+def test_collect_runtime_provenance_marks_git_unavailable(tmp_path: Path) -> None:
+    assert collect_runtime_provenance(tmp_path)["git_commit"] == "unavailable"
+
+
+def test_publish_compatibility_symlink_creates_and_updates_relative_link(tmp_path: Path) -> None:
+    target_one = tmp_path / "runs" / "one.h5ad"
+    target_two = tmp_path / "runs" / "two.h5ad"
+    target_one.parent.mkdir()
+    target_one.write_text("one", encoding="utf-8")
+    target_two.write_text("two", encoding="utf-8")
+    link = tmp_path / "latest.h5ad"
+
+    publish_compatibility_symlink(link, target_one)
+    assert link.is_symlink()
+    assert not os.readlink(link).startswith("/")
+    assert link.resolve() == target_one.resolve()
+
+    publish_compatibility_symlink(link, target_two)
+    assert link.resolve() == target_two.resolve()
+    assert list(tmp_path.glob(".latest.h5ad.*.tmp")) == []
+
+
+def test_publish_compatibility_symlink_rejects_real_file_and_missing_target(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target.h5ad"
+    target.write_text("target", encoding="utf-8")
+    real_file = tmp_path / "latest.h5ad"
+    real_file.write_text("do not replace", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        publish_compatibility_symlink(real_file, target)
+    with pytest.raises(FileNotFoundError):
+        publish_compatibility_symlink(tmp_path / "missing-link", tmp_path / "missing-target")
+
+    assert real_file.read_text(encoding="utf-8") == "do not replace"
+
+
+def test_publish_compatibility_symlink_cleans_temp_after_replace_failure(
+    monkeypatch, tmp_path: Path
+) -> None:
+    target = tmp_path / "target.h5ad"
+    target.write_text("target", encoding="utf-8")
+
+    def fail_replace(source, destination):
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    with pytest.raises(OSError, match="simulated replace failure"):
+        publish_compatibility_symlink(tmp_path / "latest.h5ad", target)
+
+    assert list(tmp_path.glob(".latest.h5ad.*.tmp")) == []
 
 
 @pytest.mark.parametrize(
