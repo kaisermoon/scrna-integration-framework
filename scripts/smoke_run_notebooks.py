@@ -11,9 +11,15 @@ notebook 之间的 h5ad 输入输出契约不断裂。命令行直接运行：
 smoke_run_notebooks_outputs/，不污染仓库。
 """
 
-import shutil, subprocess, json, os, sys, time, re, tempfile
-from pathlib import Path
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
 from datetime import datetime
+from pathlib import Path
 
 PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 os.chdir(PROJECT_ROOT)
@@ -73,7 +79,8 @@ def parse_cell_status(executed_nb_path):
         outputs = cell.get('outputs', [])
         has_error = any(o.get('output_type') == 'error' for o in outputs)
         if not outputs:
-            status = 'SKIP'  # No output = skipped/never executed
+            # Assignments and other valid cells often produce no display output.
+            status = 'PASS' if cell.get('execution_count') is not None else 'SKIP'
         elif has_error:
             err_text = ''
             for o in outputs:
@@ -84,7 +91,7 @@ def parse_cell_status(executed_nb_path):
                     if traceback:
                         err_text += ' | ' + traceback[-1].strip()[:200]
                     break
-            status = f'FAIL'
+            status = 'FAIL'
         else:
             status = 'PASS'
         cells.append({
@@ -108,6 +115,13 @@ def run_notebook(name, rel_path, output_check):
     print(f"Running: {name} ({rel_path})")
     print(f"{'='*60}")
 
+    output_path = os.path.join(PROJECT_ROOT, output_check) if output_check else None
+    output_before = None
+    if output_path and os.path.exists(output_path):
+        stat = os.stat(output_path)
+        output_before = (stat.st_mtime_ns, stat.st_size)
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
     t_start = time.time()
     try:
         # Use absolute JUPYTER path to avoid picking up system jupyter-nbconvert
@@ -117,7 +131,6 @@ def run_notebook(name, rel_path, output_check):
              "--execute", "--to", "notebook",
              "--output", os.path.basename(exec_path),
              "--output-dir", OUTPUT_DIR,
-             "--allow-errors",
              "--ExecutePreprocessor.timeout=3600",
              nb_path],
             cwd=PROJECT_ROOT,
@@ -133,7 +146,6 @@ def run_notebook(name, rel_path, output_check):
     elapsed = time.time() - t_start
 
     # Check if executed notebook was produced
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
     nb_name = os.path.basename(nb_path).replace('.ipynb', f'_exec_{name}.ipynb')
     exec_out = os.path.join(OUTPUT_DIR, nb_name)
 
@@ -143,18 +155,18 @@ def run_notebook(name, rel_path, output_check):
     if os.path.exists(exec_out):
         cells = parse_cell_status(exec_out)
         if cells:
-            n_pass = sum(1 for c in cells if c['status'] == 'PASS')
             n_fail = sum(1 for c in cells if c['status'] == 'FAIL')
-            n_skip = sum(1 for c in cells if c['status'] == 'SKIP')
-            if n_fail == 0:
-                notebook_status = "PASS"
+            if result.returncode != 0 or n_fail:
+                notebook_status = "ERROR"
             else:
-                notebook_status = "PARTIAL"
+                notebook_status = "PASS"
         else:
             notebook_status = "EMPTY"
     else:
-        # Check stderr for clues
-        notebook_status = "NO_OUTPUT"
+        notebook_status = "ERROR" if result.returncode != 0 else "NO_OUTPUT"
+
+    if result.returncode != 0:
+        notebook_status = "ERROR"
 
     result_info = {
         "name": name,
@@ -172,11 +184,21 @@ def run_notebook(name, rel_path, output_check):
     }
 
     # Check if expected output file exists
-    if output_check:
-        out_path = os.path.join(PROJECT_ROOT, output_check)
-        result_info["output_exists"] = os.path.exists(out_path)
-        if os.path.exists(out_path):
-            result_info["output_size_bytes"] = os.path.getsize(out_path)
+    if output_path:
+        output_exists = os.path.exists(output_path)
+        result_info["output_exists"] = output_exists
+        if output_exists:
+            stat = os.stat(output_path)
+            output_after = (stat.st_mtime_ns, stat.st_size)
+            result_info["output_size_bytes"] = stat.st_size
+            result_info["output_fresh"] = output_before is None or output_after != output_before
+        else:
+            result_info["output_fresh"] = False
+
+        if notebook_status == "PASS" and not output_exists:
+            notebook_status = result_info["status"] = "MISSING_OUTPUT"
+        elif notebook_status == "PASS" and not result_info["output_fresh"]:
+            notebook_status = result_info["status"] = "STALE_OUTPUT"
 
     print(f"  Status: {notebook_status} | Time: {elapsed:.1f}s | Cells: {result_info['pass_cells']}P/{result_info['fail_cells']}F/{result_info['skip_cells']}S")
     return result_info
@@ -194,22 +216,49 @@ def main():
     all_results = []
     total_start = time.time()
 
-    # Run core pipeline
-    for name, rel_path, output_check in NOTEBOOKS:
+    # Core stages are required. Once one fails, downstream inputs are invalid.
+    core_failed = False
+    for index, (name, rel_path, output_check) in enumerate(NOTEBOOKS):
         result = run_notebook(name, rel_path, output_check)
         all_results.append(result)
+        if result["status"] != "PASS":
+            core_failed = True
+            blocked = NOTEBOOKS[index + 1:] + DOWNSTREAM
+            all_results.extend(
+                {
+                    "name": blocked_name,
+                    "status": "BLOCKED",
+                    "time_seconds": 0,
+                    "error": f"Required core stage {name} failed",
+                }
+                for blocked_name, _, _ in blocked
+            )
+            break
 
-    # Run downstream notebooks (skip if core pipeline failed)
-    for name, rel_path, output_check in DOWNSTREAM:
-        result = run_notebook(name, rel_path, output_check)
-        all_results.append(result)
+    # Downstream notebooks are optional diagnostics in this PR. Their failures
+    # remain visible in the report but do not override a successful core run.
+    if not core_failed:
+        for name, rel_path, output_check in DOWNSTREAM:
+            result = run_notebook(name, rel_path, output_check)
+            result["required"] = False
+            all_results.append(result)
 
     total_elapsed = time.time() - total_start
+    optional_failed = any(
+        r.get("required") is False and r["status"] != "PASS" for r in all_results
+    )
+    if core_failed:
+        overall_status = "FAILED"
+    elif optional_failed:
+        overall_status = "SUCCESS_WITH_WARNINGS"
+    else:
+        overall_status = "SUCCESS"
 
     # ===== Produce JSON summary =====
     summary = {
         "timestamp": datetime.now().isoformat(),
         "total_time_seconds": round(total_elapsed, 1),
+        "status": overall_status,
         "results": []
     }
 
@@ -227,6 +276,7 @@ def main():
             "returncode": r.get("returncode", None),
             "stderr_tail": r.get("stderr_tail", ""),
             "stdout_tail": r.get("stdout_tail", ""),
+            "required": r.get("required", r["name"] in {n for n, _, _ in NOTEBOOKS}),
         }
         # Add failed cell details
         if r.get("cells"):
@@ -243,7 +293,12 @@ def main():
 
     # Print summary to stdout
     print(f"\n{'='*60}")
-    print(f"PIPELINE TEST COMPLETE")
+    status_message = {
+        "FAILED": "PIPELINE TEST FAILED",
+        "SUCCESS_WITH_WARNINGS": "PIPELINE TEST COMPLETE WITH WARNINGS",
+        "SUCCESS": "PIPELINE TEST COMPLETE",
+    }[overall_status]
+    print(status_message)
     print(f"Total time: {total_elapsed:.1f}s ({total_elapsed/60:.1f}min)")
     print(f"Summary written to: {summary_path}")
     print(f"{'='*60}")
@@ -251,6 +306,8 @@ def main():
         status_icon = "OK" if r['status'] == 'PASS' else r['status']
         print(f"  {r['name']:25s}  {status_icon:10s}  {r.get('time_seconds', 0):8.1f}s  {r.get('pass_cells', 0)}P/{r.get('fail_cells', 0)}F/{r.get('skip_cells', 0)}S")
 
+    return 1 if core_failed else 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
