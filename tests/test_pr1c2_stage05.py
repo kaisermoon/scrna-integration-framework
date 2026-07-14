@@ -37,7 +37,10 @@ class _Adata:
             "leiden_res_0.2": ["0", "0", "1", "1"],
             "leiden_res_0.4": ["0", "1", "2", "2"],
         })
-        self.obsm = {"X_pca": np.ones((4, 2), dtype=np.float32)}
+        self.obsm = {
+            "X_pca": np.ones((4, 2), dtype=np.float32),
+            "X_pca_harmony": np.ones((4, 2), dtype=np.float32),
+        }
         self.uns: dict = {}
         self.fail_write = False
         self.write_calls = 0
@@ -246,3 +249,60 @@ def test_write_failure_removes_partial_and_records_failure(tmp_path: Path) -> No
     assert manifest["stage_status"] == "FAILED"
     assert manifest["failure"] == {"type": "OSError", "message": "disk full"}
     assert "checkpoint" not in manifest and not list(draft.glob("*.h5ad"))
+
+
+def _contract_env(tmp_path: Path) -> tuple[dict, _Adata]:
+    """Set up env with adata ready for the USE_REP dimension + contract validation cell."""
+    env, adata = _load_env(tmp_path)
+    return env, adata
+
+
+_EXPRESSION_CONTRACT_VALID = {
+    "x_scale": "normalized_log1p",
+    "counts_layer": "counts",
+    "counts_source": ".raw.X",
+    "counts_validated": True,
+    "counts_integer_check": "full",
+    "soupx_layer": None,
+    "processing_history": [],
+    "stage": "03",
+}
+
+
+def test_expression_contract_validated_at_stage05(tmp_path: Path) -> None:
+    """Cell 5ed26e7e validates expression_contract with stage=03, normalized_log1p."""
+    env, adata = _contract_env(tmp_path)
+    adata.uns["expression_contract"] = dict(_EXPRESSION_CONTRACT_VALID)
+    source = _cell("# === USE_REP 维度匹配检查 ===")
+    exec(source, env)
+    # No exception means validation passed
+
+
+def test_expression_contract_missing_rejects(tmp_path: Path) -> None:
+    """Missing expression_contract raises KeyError."""
+    env, adata = _contract_env(tmp_path)
+    source = _cell("# === USE_REP 维度匹配检查 ===")
+    with pytest.raises((KeyError, NameError), match="expression_contract"):
+        exec(source, env)
+
+
+def test_expression_contract_wrong_scale_rejects(tmp_path: Path) -> None:
+    """Non-normalized_log1p x_scale raises ValueError."""
+    env, adata = _contract_env(tmp_path)
+    adata.uns["expression_contract"] = {
+        **_EXPRESSION_CONTRACT_VALID, "x_scale": "raw_counts",
+    }
+    source = _cell("# === USE_REP 维度匹配检查 ===")
+    with pytest.raises(ValueError, match="x_scale"):
+        exec(source, env)
+
+
+def test_expression_contract_wrong_stage_rejects(tmp_path: Path) -> None:
+    """Wrong stage value raises ValueError."""
+    env, adata = _contract_env(tmp_path)
+    adata.uns["expression_contract"] = {
+        **_EXPRESSION_CONTRACT_VALID, "stage": "01",
+    }
+    source = _cell("# === USE_REP 维度匹配检查 ===")
+    with pytest.raises(ValueError, match="stage"):
+        exec(source, env)
