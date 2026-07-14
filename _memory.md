@@ -2,8 +2,8 @@
 title: "项目记忆：scRNA-seq整合分析框架"
 type: project-memory
 project_id: "scrna-integration-framework"
-last_session: "2026-07-10"
-updated: "2026-07-10"
+last_session: "2026-07-14"
+updated: "2026-07-14"
 ---
 
 # 项目记忆：scRNA-seq整合分析框架
@@ -15,6 +15,16 @@ updated: "2026-07-10"
 ## 当前状态
 
 **phase = analysis**。2026-06-05 由 `/kickoff` 新建。代码工程完成、23-stage 管线打通，早已过 planning 阶段。
+
+## 💾 会话保存点（2026-07-14，P0 生产整改全完成，main = `e682a0d`）
+
+**P0 全阶段（a-i）合并完成**：8 个 notebook（01_kim/nancang/nowicki/yue + 02_merged + 03_normalized + 04_embedded + 05_clustered）全部接入 expression_contract（layers["counts"] 契约 + checkpoint 校验），删除全局 preprocessing_done 聚合与 dir() 判断，改用显式状态机与契约传递。规格：docs/生产整改决策-20260714.md（决策 1-6）+ docs/整改执行分解-P0-P3-20260714.md（P0 节）。
+
+**执行模式验证**：opus 做 cell 级规划（99 行 workflow 脚本，8 个叶子各带 brief 到 cell id/契约字段/坑位修正），deepseek 作 sonnet 容量替补执行（sonnet 三次 spawn 均遇容量问题自动 fallback），16 agent（8 coder + 8 reviewer）并行跑完，每个 reviewer 跑真实 git 验证 + 亲执行测试（无 fabrication，两轮后彻底杜绝）。主 Agent（opus）亲验所有合并前测试 + diff 范围，不信 reviewer 自报。
+
+**耦合修正**：Stage-01 四叶子（b/c/d/e）本以为独立、实际共享参数化测试（test_pr1b1 单一 _env01 fixture 跑 4 源），识别后整合为单 PR（#152）、canonical fixture 按 source 区分契约（nowicki 用 .raw.X/normalized_log1p，其余 X/raw_counts）。g/f 叶子测试各需补 exec cell + 提供 validate_expression_contract。
+
+**技术债清零**：全 678 测试通过（零回归），8 个 worktree + 9 个分支清理完毕，main 干净可继续。
 
 ## 💾 会话保存点（2026-07-10，拉取远程新 main + phase 统一 + PII 泄露清除 + 新增子目录文档，main = `df23982`）
 
