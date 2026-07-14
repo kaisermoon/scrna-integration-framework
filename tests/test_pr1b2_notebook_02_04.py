@@ -19,6 +19,8 @@ class _Adata:
         self.X = sp.csr_matrix(np.ones((n_obs, 2), dtype=np.float32))
         self.n_obs, self.n_vars = self.X.shape
         self.obs = pd.DataFrame(index=range(n_obs))
+        # P1-d：checkpoint cell 会检查 DOUBLET_INCLUDE_KEY 是否在 obs.columns
+        self.obs["doublet_include"] = True
         self.var = pd.DataFrame({"highly_variable": [True, False]})
         self.uns: dict = {}
         self.layers = {"counts": sp.csr_matrix(np.ones((n_obs, 2), dtype=np.float32))}
@@ -53,9 +55,12 @@ def _env02(tmp_path: Path, n_obs: int = 2) -> dict:
             "manifest_sha256": rc.sha256_file(manifest_path), "checkpoint_path": str(checkpoint_path),
             "checkpoint_sha256": rc.sha256_file(checkpoint_path)})
     env["validate_expression_contract"] = rc.validate_expression_contract
+    # P1-d：checkpoint cell 引用的 doublet 集成变量
     env.update(adata=_Adata(n_obs), upstream_inputs=upstream_inputs, PER_DATASET_PATHS=sources, HOUSEKEEPING_GENES=["ACTB", "GAPDH"],
                RUN_ID="stage02", RUN_ROOT=str(tmp_path / "runs"),
-               OUTPUT_FILENAME="02.h5ad")
+               OUTPUT_FILENAME="02.h5ad",
+               doublet_inclusion_report={"n_before": n_obs, "n_after": n_obs, "n_excluded": 0},
+               doublet_needs_review=False, flagged_samples=[])
     return env
 def _env03(tmp_path: Path, stage: str = "02_merged") -> dict:
     root = tmp_path / "upstream"
