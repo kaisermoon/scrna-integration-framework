@@ -95,6 +95,7 @@ def _env(tmp_path: Path, embedding: np.ndarray | None) -> tuple[dict, _Adata]:
         OUTPUT_FILENAME="04.h5ad",
         _root=str(tmp_path),
         atomic_write_json=rc.atomic_write_json,
+        aggregate_method_status=rc.aggregate_method_status,
         collect_runtime_provenance=lambda _, packages: {
             "packages_requested": sorted(packages)
         },
