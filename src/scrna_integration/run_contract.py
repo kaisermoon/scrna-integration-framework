@@ -295,6 +295,168 @@ def determine_stage_status(
     return StageStatus.SUCCESS
 
 
+# ---- expression_contract schema 常量（决策 1/2）-------------------------------------------
+# 所有 counts 契约实现同一份 schema，写在 adata.uns["expression_contract"]。
+# 这是 per-file 并行开发能收敛的前提——各 notebook 只要实现同一 schema 就不会互相冲突。
+
+_EXPRESSION_CONTRACT_REQUIRED_KEYS = frozenset({
+    "x_scale", "counts_layer", "counts_source", "counts_validated",
+    "counts_integer_check", "soupx_layer", "processing_history", "stage",
+})
+_VALID_X_SCALES = frozenset({"raw_counts", "normalized_log1p"})
+_VALID_COUNTS_SOURCES = frozenset({"X", ".raw.X", "layers[counts]"})
+_VALID_INTEGER_CHECKS = frozenset({"full", "blockwise"})
+_VALID_STAGES = frozenset({"01", "02", "03"})
+_SOUPX_LAYER_ALLOWED = frozenset({"counts_soupx", None})
+
+
+def validate_expression_contract(
+    adata: Any,
+    expected_scale: str | None = None,
+    stage: str | None = None,
+) -> dict[str, Any]:
+    """验证 adata.uns["expression_contract"] 符合决策 1/2 定义的 schema。
+
+    纯技术校验管道：检查字段存在性、类型和允许值，不含分析逻辑。
+    notebook 在阶段边界调用此函数以确保 counts 契约在阶段间一致传播。
+
+    Args:
+        adata: Anndata 对象，契约位于 adata.uns["expression_contract"]
+        expected_scale: 若提供，验证 x_scale 匹配此值
+        stage: 若提供，验证 stage 匹配此值
+
+    Returns:
+        验证通过的 expression_contract dict
+
+    Raises:
+        KeyError: expression_contract 不存在或为 None
+        ValueError: schema 校验失败
+    """
+    uns = adata.uns
+    contract = uns.get("expression_contract")
+    if contract is None:
+        raise KeyError(
+            "expression_contract not found in adata.uns"
+        )
+    if not isinstance(contract, dict):
+        raise ValueError(
+            f"expression_contract must be a dict, got {type(contract).__name__}"
+        )
+
+    # 检查字段完整性
+    missing = _EXPRESSION_CONTRACT_REQUIRED_KEYS - contract.keys()
+    if missing:
+        raise ValueError(
+            f"expression_contract missing required keys: {sorted(missing)}"
+        )
+    unknown = contract.keys() - _EXPRESSION_CONTRACT_REQUIRED_KEYS
+    if unknown:
+        raise ValueError(
+            f"expression_contract has unknown keys: {sorted(unknown)}"
+        )
+
+    # x_scale：raw_counts 或 normalized_log1p
+    x_scale = contract["x_scale"]
+    if x_scale not in _VALID_X_SCALES:
+        raise ValueError(
+            f"expression_contract.x_scale must be one of {sorted(_VALID_X_SCALES)}, "
+            f"got {x_scale!r}"
+        )
+    if expected_scale is not None and x_scale != expected_scale:
+        raise ValueError(
+            f"expression_contract.x_scale is {x_scale!r}, expected {expected_scale!r}"
+        )
+
+    # counts_layer：非空字符串
+    counts_layer = contract["counts_layer"]
+    if not isinstance(counts_layer, str) or not counts_layer:
+        raise ValueError(
+            f"expression_contract.counts_layer must be a non-empty string, "
+            f"got {counts_layer!r}"
+        )
+
+    # counts_source：X / .raw.X / layers[counts]
+    counts_source = contract["counts_source"]
+    if counts_source not in _VALID_COUNTS_SOURCES:
+        raise ValueError(
+            f"expression_contract.counts_source must be one of "
+            f"{sorted(_VALID_COUNTS_SOURCES)}, got {counts_source!r}"
+        )
+
+    # counts_validated：bool
+    counts_validated = contract["counts_validated"]
+    if not isinstance(counts_validated, bool):
+        raise ValueError(
+            f"expression_contract.counts_validated must be bool, "
+            f"got {type(counts_validated).__name__}"
+        )
+
+    # counts_integer_check：full 或 blockwise
+    counts_integer_check = contract["counts_integer_check"]
+    if counts_integer_check not in _VALID_INTEGER_CHECKS:
+        raise ValueError(
+            f"expression_contract.counts_integer_check must be one of "
+            f"{sorted(_VALID_INTEGER_CHECKS)}, got {counts_integer_check!r}"
+        )
+
+    # soupx_layer：counts_soupx 或 None
+    soupx_layer = contract["soupx_layer"]
+    if soupx_layer not in _SOUPX_LAYER_ALLOWED:
+        raise ValueError(
+            f"expression_contract.soupx_layer must be 'counts_soupx' or None, "
+            f"got {soupx_layer!r}"
+        )
+
+    # processing_history：list
+    processing_history = contract["processing_history"]
+    if not isinstance(processing_history, list):
+        raise ValueError(
+            f"expression_contract.processing_history must be a list, "
+            f"got {type(processing_history).__name__}"
+        )
+
+    # stage：01 / 02 / 03
+    contract_stage = contract["stage"]
+    if contract_stage not in _VALID_STAGES:
+        raise ValueError(
+            f"expression_contract.stage must be one of {sorted(_VALID_STAGES)}, "
+            f"got {contract_stage!r}"
+        )
+    if stage is not None and contract_stage != stage:
+        raise ValueError(
+            f"expression_contract.stage is {contract_stage!r}, expected {stage!r}"
+        )
+
+    return dict(contract)
+
+
+def aggregate_method_status(
+    method_results: Mapping[str, MethodStatus | str],
+) -> dict[str, MethodStatus]:
+    """聚合 per-method 执行结果为 required_methods dict。
+
+    排除 SKIPPED_BY_USER 的方法（用户显式选择不运行，不计入 required）。
+    其余方法（SUCCESS、UNAVAILABLE、FAILED）均视为 required——
+    依据决策 9：被勾选的方法失败即计入方法状态。
+
+    notebook 在调用 determine_stage_status 前，可自行将部分
+    UNAVAILABLE 或 FAILED 的条目从返回 dict 中移入 warnings 列表，
+    以实现 SUCCESS_WITH_WARNINGS 逻辑（部分方法失败但仍有可用结果）。
+
+    Args:
+        method_results: {method_name: MethodStatus} 映射
+
+    Returns:
+        required_methods dict，可直接传给 determine_stage_status()
+    """
+    result: dict[str, MethodStatus] = {}
+    for name, status in method_results.items():
+        status = MethodStatus(status)
+        if status is not MethodStatus.SKIPPED_BY_USER:
+            result[name] = status
+    return result
+
+
 @dataclass(frozen=True)
 class RunPaths:
     """一个不可覆盖 run 的 draft/promoted 路径。"""
