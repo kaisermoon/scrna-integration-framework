@@ -398,8 +398,10 @@ def build_mllmcelltype_config(
 ) -> tuple[dict[str, str], dict[str, str], list[str]]:
     """从 .env LLM_GROUP 构建 mLLMCelltype 所需的配置。
 
-    遍历所有活跃 group，取每个 group 的 haiku 档模型 +
-    api_key + base_url（已补端点）。
+    遍历所有活跃 group，取每个 group 的所有已配置模型档位 +
+    api_key + base_url（已补端点）。返回的字典按唯一 group 键组织
+    （NAME 优先、未设时回落 provider、同 provider 多个 group 冲突时
+    追加 ``#编号`` 去重），不再按 provider 归并。
 
     Parameters
     ----------
@@ -414,9 +416,13 @@ def build_mllmcelltype_config(
     -------
     tuple
         ``(api_keys, base_urls, model_list)`` 三元组。
-        - ``api_keys``: ``{provider: api_key}``
-        - ``base_urls``: ``{provider: resolved_url}``
+        - ``api_keys``: ``{group_key: api_key}``
+        - ``base_urls``: ``{group_key: resolved_url}``
         - ``model_list``: 模型名列表
+
+        group_key 构成规则：优先取 group 的 NAME（LLM_GROUP{N}_NAME），
+        未设时回落为 provider 名；若该键已被前一个贡献了 api_key 的
+        group 占用，追加 ``#编号`` 后缀以保证每个 group 拥有独立键。
     """
     active_groups = get_active_groups(project_root=project_root)
     if not active_groups:
@@ -426,6 +432,10 @@ def build_mllmcelltype_config(
     base_urls: dict[str, str] = {}
     model_list: list[str] = []
 
+    # 记录已被前面 group 占用的路由键，用于同 provider 多个 group
+    # 冲突时自动追加 gid 编号去重（决策7）。
+    _seen_group_keys: set[str] = set()
+
     for gid in active_groups:
         cfg = load_llm_group_config(group=gid, project_root=project_root)
         if cfg is None:
@@ -433,21 +443,35 @@ def build_mllmcelltype_config(
         provider = cfg.get("provider", "")
         key = cfg.get("api_key", "")
         url = cfg.get("base_url", "")
+
+        # 决策7：路由键改用唯一 group 标识，避免多个 group 共用同一
+        # provider 时后组覆盖前组的 key 与 endpoint。优先用 group
+        # 名（LLM_GROUP{N}_NAME，未设时回落 provider），若该名已被
+        # 前一个 group 占用，追加 group 编号去重，保证每个 group
+        # 拥有独立键。
+        group_key: str = cfg.get("name", "") or provider
+        if group_key in _seen_group_keys:
+            group_key = f"{group_key}#{gid}"
+
         # B7 默认多模型共识：取每个 group 所有已配置的模型档位
         # （haiku / sonnet / opus），而非仅 haiku 单模型。
         # 下游调用方根据模型数量判断是否启用 discussion 模式。
+        _contributed = False
         for _tier in ("haiku", "sonnet", "opus"):
             _model = cfg.get("models", {}).get(_tier, "")
             if _model and key:
                 model_list.append(_model)
-                api_keys[provider] = key
+                api_keys[group_key] = key
                 if url:
-                    base_urls[provider] = _resolve_endpoint(url, provider)
+                    base_urls[group_key] = _resolve_endpoint(url, provider)
+                _contributed = True
+        if _contributed:
+            _seen_group_keys.add(group_key)
 
     if model_list_override:
-        # api_keys 的键是 provider 名（如 "anthropic"），而
-        # model_list_override 中的是模型名（如 "claude-haiku-4-5"），
-        # 不能直接用模型名去匹配 provider 名。
+        # api_keys 的键是唯一 group 键（NAME 优先 / provider 回落 /
+        # 冲突追加 #编号），而 model_list_override 中的是模型名
+        # （如 "claude-haiku-4-5"），不能直接用模型名去匹配 group 键。
         # 若没有任何已配置的 api_key，则所有 override 模型都缺少 key；
         # 否则接受 override 列表，下游路由会将模型分派到对应 provider。
         if not api_keys:
