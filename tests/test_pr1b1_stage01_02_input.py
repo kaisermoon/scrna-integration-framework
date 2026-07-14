@@ -13,11 +13,14 @@ import pytest
 import scipy.sparse as sp
 
 import scrna_integration.run_contract as rc
+
 ROOT = Path(__file__).parents[1]
 SOURCES = {
     "01_kim.ipynb": "Kim_2023", "01_nancang.ipynb": "Nancang_2025",
     "01_nowicki.ipynb": "Nowicki_2023", "01_yue.ipynb": "Yue_2024",
 }
+# g4 起 01_nowicki 先迁移到 v1 manifest schema；其余 notebook 仍为 legacy
+V1_PRODUCERS = frozenset({"01_nowicki.ipynb"})
 NB01 = [f"notebooks/01_per_dataset/{name}" for name in SOURCES]
 NB02 = "notebooks/02_merged.ipynb"
 def _nb(path: str) -> dict:
@@ -63,6 +66,17 @@ def _env01(tmp: Path, path: str, run_id: str, n_obs: int = 2) -> dict:
         "prepare_run", "promote_run", "sha256_file", "snapshot_effective_parameters",
     ):
         env[name] = getattr(rc, name)
+    # v1 producer 需要额外注入 artifact helper 与 UTC 时间戳函数
+    if Path(path).name in V1_PRODUCERS:
+        import shutil as _shutil
+        env["fingerprint_input"] = rc.fingerprint_input
+        env["artifact_record"] = rc.artifact_record
+        env["utc_now_rfc3339"] = rc.utc_now_rfc3339
+        env["shutil"] = _shutil
+        # 为 artifact 校验创建 mock 复杂度图（模拟上游绘图 cell 产出）
+        _plot = tmp / "results" / "figures" / "01_nowicki_complexity.png"
+        _plot.parent.mkdir(parents=True, exist_ok=True)
+        _plot.write_bytes(b"mock-complexity-plot-for-test")
     return env
 
 def _upstream(root: Path, source: str, run_id: str) -> Path:
@@ -103,11 +117,22 @@ def test_json_ast_params_and_prepare_run_placement() -> None:
 @pytest.mark.parametrize("path", NB01)
 def test_stage01_success_promotes_auditable_checkpoint(tmp_path: Path, path: str) -> None:
     env = _env01(tmp_path, path, f"success-{Path(path).stem}")
+    is_v1 = Path(path).name in V1_PRODUCERS
     expected = env["source_dataset"]
     exec(_cell(path, "# Checkpoint"), env)
     promoted = tmp_path / "runs" / env["RUN_ID"] / "promoted"
     manifest = json.loads((promoted / "manifest.json").read_text(encoding="utf-8"))
-    assert (manifest["stage"], manifest["source_dataset"], manifest["stage_status"]) == ("01_qcd", expected, "SUCCESS")
+    assert (manifest["stage"], manifest["stage_status"]) == ("01_qcd", "SUCCESS")
+    if is_v1:
+        # v1 manifest 不含 source_dataset 顶层字段；来源信息在 effective_parameters 与 inputs 中
+        assert manifest["schema_version"] == "1"
+        assert manifest["started_at"].endswith("Z") and manifest["completed_at"].endswith("Z")
+        assert manifest["method_status"]["basic_filter"] == "skipped_by_user"
+        assert len(manifest["artifacts"]) >= 1
+        assert manifest["artifacts"][0]["role"] == "complexity_plot"
+        assert not {"source_dataset"} & set(manifest.keys())
+    else:
+        assert manifest["source_dataset"] == expected
     assert manifest["effective_parameters"]["RUN_ID"] == env["RUN_ID"]
     assert not {"RSCRIPT_BIN", "R_AVAILABLE"} & manifest["effective_parameters"].keys()
     assert manifest["runtime_provenance"]["python"] and all(manifest["hard_postconditions"].values())
@@ -160,7 +185,8 @@ def test_stage02_rejects_invalid_upstream(tmp_path: Path, case: str, match: str)
         env["UPSTREAM_RUNS"]["Kim_2023"] = env["UPSTREAM_RUNS"]["Nancang_2025"]
     elif case == "stage":
         path = Path(env["UPSTREAM_RUN_ROOT"]) / env["UPSTREAM_RUNS"]["Kim_2023"] / "promoted/manifest.json"
-        manifest = json.loads(path.read_text(encoding="utf-8")); manifest["stage"] = "02_merged"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest["stage"] = "02_merged"
         rc.atomic_write_json(path, manifest, overwrite=True)
     elif case == "hash":
         next(iter(registry)).write_bytes(b"tampered")
