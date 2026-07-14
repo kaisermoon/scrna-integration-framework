@@ -37,9 +37,11 @@ class _Adata:
     def __init__(self, source: str, n_obs: int = 2) -> None:
         self.X = sp.csr_matrix(np.ones((n_obs, 2), dtype=np.float32))
         self.n_obs, self.n_vars = self.X.shape
+        self.shape = self.X.shape
         self.var_names = ["GENE1", "GENE2"]
         self.obs = pd.DataFrame({"source_dataset": [source] * n_obs})
         self.uns: dict = {}
+        self.layers: dict = {}
 
     def write_h5ad(self, path: Path, **_: object) -> None:
         Path(path).write_bytes(b"checkpoint")
@@ -61,8 +63,22 @@ def _env01(tmp: Path, path: str, run_id: str, n_obs: int = 2) -> dict:
     for name in (
         "atomic_write_json", "collect_runtime_provenance", "determine_stage_status",
         "prepare_run", "promote_run", "sha256_file", "snapshot_effective_parameters",
+        "validate_expression_contract",
     ):
         env[name] = getattr(rc, name)
+    # P0-b: 填充 layers["counts"] 与 expression_contract，供 checkpoint 断言消费
+    _a = env["adata"]
+    _a.layers["counts"] = sp.csr_matrix(np.ones((n_obs, 2), dtype=np.float32))
+    _a.uns["expression_contract"] = {
+        "x_scale": "raw_counts",
+        "counts_layer": "counts",
+        "counts_source": "X",
+        "counts_validated": False,
+        "counts_integer_check": None,
+        "soupx_layer": None,
+        "processing_history": [],
+        "stage": "01",
+    }
     return env
 
 def _upstream(root: Path, source: str, run_id: str) -> Path:
