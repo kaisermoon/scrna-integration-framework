@@ -21,6 +21,7 @@ class _Adata:
         self.obs = pd.DataFrame(index=range(n_obs))
         self.var = pd.DataFrame({"highly_variable": [True, False]})
         self.uns: dict = {}
+        self.layers = {"counts": sp.csr_matrix(np.ones((n_obs, 2), dtype=np.float32))}
 
     def write_h5ad(self, path: Path, **_: object) -> None:
         Path(path).write_bytes(b"checkpoint")
@@ -59,12 +60,19 @@ def _env03(tmp_path: Path, stage: str = "02_merged") -> dict:
     root = tmp_path / "upstream"
     checkpoint = _upstream(root, "stage02", stage)
     adata = _Adata()
+    adata.uns["expression_contract"] = {
+        "x_scale": "raw_counts", "counts_layer": "counts",
+        "counts_source": "layers[counts]", "counts_validated": True,
+        "counts_integer_check": "blockwise", "soupx_layer": None,
+        "processing_history": [], "stage": "02",
+    }
     env = _base(tmp_path)
     exec(_cell(NBS[1], "# === PARAMS ==="), env)
     env.update(UPSTREAM_RUN_ROOT=str(root), UPSTREAM_RUN_ID="stage02", RUN_ID="stage03",
                RUN_ROOT=str(tmp_path / "runs"), OUTPUT_FILENAME="03.h5ad",
                sc=SimpleNamespace(read_h5ad=lambda path: adata if Path(path) == checkpoint else None),
-               excluded_counts={}, _n_genes_values=[3000], _flavor_values=["seurat"])
+               excluded_counts={}, _n_genes_values=[3000], _flavor_values=["seurat"],
+               validate_expression_contract=rc.validate_expression_contract)
     return env
 def test_json_ast_params_and_prepare_run_is_deferred() -> None:
     for path in NBS:
@@ -110,6 +118,15 @@ def test_stage02_promotion_and_failure_audit(tmp_path: Path, case: str) -> None:
 def test_stage03_verified_input_and_promotion(tmp_path: Path, case: str) -> None:
     env = _env03(tmp_path)
     exec(_cell(NBS[1], "# === 加载上游 ==="), env)
+    # P0-g: 为 normalize cell 提供 mock sc.pp（免真实 scanpy），
+    # 补 exec counts-layer 与 normalize-code cells，
+    # 使 _upstream_contract 和 _counts_integrity_checked 在 checkpoint cell 前已定义
+    env["sc"].pp = SimpleNamespace(
+        normalize_total=lambda adata, target_sum: None,
+        log1p=lambda adata: None,
+    )
+    exec(_cell(NBS[1], "从上游验证 layers"), env)
+    exec(_cell(NBS[1], "# === 标准化分支 ==="), env)
     adata_ref = env["adata"]
     if case == "write":
         def fail(path: Path, **_: object) -> None:
