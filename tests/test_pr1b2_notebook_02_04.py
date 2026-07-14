@@ -52,6 +52,7 @@ def _env02(tmp_path: Path, n_obs: int = 2) -> dict:
         upstream_inputs.append({"source_dataset": source, "run_id": f"run-{i}", "stage": "01_qcd", "manifest_path": str(manifest_path),
             "manifest_sha256": rc.sha256_file(manifest_path), "checkpoint_path": str(checkpoint_path),
             "checkpoint_sha256": rc.sha256_file(checkpoint_path)})
+    env["validate_expression_contract"] = rc.validate_expression_contract
     env.update(adata=_Adata(n_obs), upstream_inputs=upstream_inputs, PER_DATASET_PATHS=sources, HOUSEKEEPING_GENES=["ACTB", "GAPDH"],
                RUN_ID="stage02", RUN_ROOT=str(tmp_path / "runs"),
                OUTPUT_FILENAME="02.h5ad")

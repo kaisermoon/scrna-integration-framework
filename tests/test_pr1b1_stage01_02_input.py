@@ -34,7 +34,7 @@ def _cell(path: str, marker: str) -> str:
     raise AssertionError(f"{path} 缺少 cell: {marker}")
 
 class _Adata:
-    def __init__(self, source: str, n_obs: int = 2) -> None:
+    def __init__(self, source: str, n_obs: int = 2, layers: dict | None = None) -> None:
         self.X = sp.csr_matrix(np.ones((n_obs, 2), dtype=np.float32))
         self.n_obs, self.n_vars = self.X.shape
         self.shape = self.X.shape
@@ -99,12 +99,27 @@ def _upstream(root: Path, source: str, run_id: str) -> Path:
 def _env02(tmp: Path) -> tuple[dict, dict[Path, _Adata]]:
     root = tmp / "runs"
     runs = {source: f"run-{i}" for i, source in enumerate(SOURCES.values())}
-    registry = {_upstream(root, src, rid).resolve(): _Adata(src) for src, rid in runs.items()}
+    registry = {}
+    for src, rid in runs.items():
+        ad = _Adata(src)
+        ad.layers["counts"] = sp.csr_matrix(np.ones((ad.n_obs, 2), dtype=np.float32))
+        ad.uns["expression_contract"] = {
+            "x_scale": "raw_counts",
+            "counts_layer": "counts",
+            "counts_source": "layers[counts]",
+            "counts_validated": False,
+            "counts_integer_check": "blockwise",
+            "soupx_layer": None,
+            "processing_history": [],
+            "stage": "02",
+        }
+        registry[_upstream(root, src, rid).resolve()] = ad
     return {
         "UPSTREAM_RUN_ROOT": str(root), "UPSTREAM_RUNS": runs, "Path": Path, "json": json,
         "pd": pd, "display": lambda _: None, "resume_run": rc.resume_run,
         "sha256_file": rc.sha256_file, "validate_checkpoint": rc.validate_checkpoint,
         "sc": SimpleNamespace(read_h5ad=lambda path: registry[Path(path).resolve()]),
+        "sp": sp, "np": np,
     }, registry
 
 def test_json_ast_params_and_prepare_run_placement() -> None:
@@ -189,3 +204,53 @@ def test_stage02_rejects_invalid_upstream(tmp_path: Path, case: str, match: str)
         registry[path] = _Adata("Wrong_source")
     with pytest.raises(ValueError, match=match):
         exec(_cell(NB02, "# 加载每个 per-dataset h5ad"), env)
+
+
+# ---- P0-f: 02 counts 契约 per-source 校验 ----------------------------------------
+
+@pytest.mark.parametrize(("modify", "match"), [
+    ("missing_layer", r"layers\['counts'\] 不存在"),
+    ("negative", "含负值"),
+    ("float_data", "含非整数值"),
+    ("shape_mismatch", r"shape.*不一致"),
+])
+def test_stage02_rejects_invalid_counts_layer(tmp_path: Path, modify: str, match: str) -> None:
+    """逐来源 counts 校验：layers['counts'] 缺失/负值/非整数/shape 不对时应抛错."""
+    env, registry = _env02(tmp_path)
+    for ad in registry.values():
+        if modify == "missing_layer":
+            ad.layers = {}
+        elif modify == "negative":
+            ad.layers["counts"] = sp.csr_matrix(np.array([[-1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
+        elif modify == "float_data":
+            ad.layers["counts"] = sp.csr_matrix(np.array([[1.5, 2.0], [3.7, 4.0]], dtype=np.float32))
+        elif modify == "shape_mismatch":
+            ad.layers["counts"] = sp.csr_matrix(np.ones((1, 3), dtype=np.float32))
+        break
+    with pytest.raises(ValueError, match=match):
+        exec(_cell(NB02, "# 加载每个 per-dataset h5ad"), env)
+
+
+def test_stage02_no_preprocessing_done_aggregation() -> None:
+    """cell 7207f34e 不含全局 preprocessing_done 聚合逻辑（决策 2：不靠全局状态猜契约）."""
+    source = _cell(NB02, "merge_report_v1")
+    assert "all_pp_done" not in source, "preprocessing_done 聚合逻辑应已删除"
+    assert "preprocessing_done_merged" not in source, "preprocessing_done_merged 字段应已删除"
+
+
+def test_stage02_checkpoint_imports_validate_expression_contract() -> None:
+    """setup cell 导入 validate_expression_contract."""
+    setup = _cell(NB02, "# === Setup ===")
+    assert "validate_expression_contract" in setup, "setup 应导入 validate_expression_contract"
+
+
+def test_stage02_checkpoint_writes_expression_contract() -> None:
+    """checkpoint cell 写入 stage='02' 的 expression_contract."""
+    # 用 'checked_at": "02_merged"' 精确定位 checkpoint cell（setup cell 也有
+    # expression_contract 但仅出现在 import 行，不会匹配此 marker）
+    checkpoint = _cell(NB02, 'checked_at": "02_merged"')
+    assert '"stage": "02"' in checkpoint
+    assert '"counts_source": "layers[counts]"' in checkpoint
+    assert '"counts_integer_check": "blockwise"' in checkpoint
+    assert '"soupx_layer": None' in checkpoint
+    assert "validate_expression_contract" in checkpoint
