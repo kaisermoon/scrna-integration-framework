@@ -66,15 +66,19 @@ def _env01(tmp: Path, path: str, run_id: str, n_obs: int = 2) -> dict:
         "validate_expression_contract",
     ):
         env[name] = getattr(rc, name)
-    # P0-b: 填充 layers["counts"] 与 expression_contract，供 checkpoint 断言消费
+    # 填充 layers["counts"] 与 expression_contract，供 checkpoint 断言消费
+    # 按 source 区分契约值：nowicki X 是 normalized_log1p 且 counts 来自 .raw.X
+    # 四个 notebook 的 checkpoint 均调用 validate_expression_contract(full schema)，
+    # 因此 counts_integer_check 不能为 None，必须为 "full" 或 "blockwise"
     _a = env["adata"]
     _a.layers["counts"] = sp.csr_matrix(np.ones((n_obs, 2), dtype=np.float32))
+    _is_nowicki = source == "Nowicki_2023"
     _a.uns["expression_contract"] = {
-        "x_scale": "raw_counts",
+        "x_scale": "normalized_log1p" if _is_nowicki else "raw_counts",
         "counts_layer": "counts",
-        "counts_source": "X",
+        "counts_source": ".raw.X" if _is_nowicki else "X",
         "counts_validated": False,
-        "counts_integer_check": None,
+        "counts_integer_check": "blockwise" if _is_nowicki else "full",
         "soupx_layer": None,
         "processing_history": [],
         "stage": "01",
