@@ -13,6 +13,7 @@ import pytest
 from scrna_integration.run_contract import (
     MethodStatus,
     StageStatus,
+    aggregate_method_status,
     atomic_write_json,
     collect_runtime_provenance,
     determine_stage_status,
@@ -24,6 +25,7 @@ from scrna_integration.run_contract import (
     snapshot_effective_parameters,
     validate_artifacts,
     validate_checkpoint,
+    validate_expression_contract,
 )
 
 ACCEPTANCE = {"accepted_by": "researcher", "accepted_at": "2026-07-13T12:00:00Z"}
@@ -681,3 +683,279 @@ def test_relative_root_prepare_promote_and_resume(monkeypatch, tmp_path: Path) -
 
     assert promoted == tmp_path / "results/runs/success/promoted/checkpoint.h5ad"
     assert resume_run("results/runs", paths.run_id, promoted=True) == paths
+
+
+# ---- validate_expression_contract ------------------------------------------------
+
+
+class _FakeAdata:
+    """最小 AnnData 替身，仅提供 uns dict 访问。"""
+
+    def __init__(self, uns: dict | None = None) -> None:
+        self.uns: dict = uns if uns is not None else {}
+
+
+def _valid_contract(**overrides: object) -> dict:
+    """返回一个通过所有 schema 校验的 expression_contract。"""
+    contract: dict = {
+        "x_scale": "raw_counts",
+        "counts_layer": "counts",
+        "counts_source": "X",
+        "counts_validated": True,
+        "counts_integer_check": "full",
+        "soupx_layer": None,
+        "processing_history": [],
+        "stage": "01",
+    }
+    contract.update(overrides)
+    return contract
+
+
+def test_validate_expression_contract_valid_full() -> None:
+    adata = _FakeAdata({"expression_contract": _valid_contract()})
+    result = validate_expression_contract(adata)
+    assert result["x_scale"] == "raw_counts"
+    assert result["counts_layer"] == "counts"
+
+
+def test_validate_expression_contract_missing_key() -> None:
+    contract = _valid_contract()
+    del contract["counts_source"]
+    adata = _FakeAdata({"expression_contract": contract})
+    with pytest.raises(ValueError, match="missing required keys"):
+        validate_expression_contract(adata)
+
+
+def test_validate_expression_contract_unknown_key() -> None:
+    contract = _valid_contract()
+    contract["extra_field"] = "unexpected"
+    adata = _FakeAdata({"expression_contract": contract})
+    with pytest.raises(ValueError, match="has unknown keys"):
+        validate_expression_contract(adata)
+
+
+def test_validate_expression_contract_missing_entirely() -> None:
+    adata = _FakeAdata({})
+    with pytest.raises(KeyError, match="expression_contract not found"):
+        validate_expression_contract(adata)
+
+
+def test_validate_expression_contract_null_contract() -> None:
+    adata = _FakeAdata({"expression_contract": None})
+    with pytest.raises(KeyError, match="expression_contract not found"):
+        validate_expression_contract(adata)
+
+
+def test_validate_expression_contract_not_dict() -> None:
+    adata = _FakeAdata({"expression_contract": "not a dict"})
+    with pytest.raises(ValueError, match="must be a dict"):
+        validate_expression_contract(adata)
+
+
+@pytest.mark.parametrize("bad_scale", ["logcounts", "cpm", "raw", 1, None])
+def test_validate_expression_contract_invalid_x_scale(bad_scale) -> None:
+    adata = _FakeAdata({"expression_contract": _valid_contract(x_scale=bad_scale)})
+    with pytest.raises(ValueError, match="x_scale"):
+        validate_expression_contract(adata)
+
+
+def test_validate_expression_contract_x_scale_matches_expected() -> None:
+    adata = _FakeAdata({"expression_contract": _valid_contract(x_scale="raw_counts")})
+    validate_expression_contract(adata, expected_scale="raw_counts")  # 不抛
+
+
+def test_validate_expression_contract_x_scale_expected_mismatch() -> None:
+    adata = _FakeAdata({"expression_contract": _valid_contract(x_scale="raw_counts")})
+    with pytest.raises(ValueError, match="expected 'normalized_log1p'"):
+        validate_expression_contract(adata, expected_scale="normalized_log1p")
+
+
+@pytest.mark.parametrize("bad_source", [".raw", "layers.counts", "raw.X", "", 1, None])
+def test_validate_expression_contract_invalid_counts_source(bad_source) -> None:
+    adata = _FakeAdata({"expression_contract": _valid_contract(counts_source=bad_source)})
+    with pytest.raises(ValueError, match="counts_source"):
+        validate_expression_contract(adata)
+
+
+@pytest.mark.parametrize("good_source", ["X", ".raw.X", "layers[counts]"])
+def test_validate_expression_contract_valid_counts_sources(good_source) -> None:
+    adata = _FakeAdata({"expression_contract": _valid_contract(counts_source=good_source)})
+    validate_expression_contract(adata)  # 不抛
+
+
+def test_validate_expression_contract_counts_validated_not_bool() -> None:
+    adata = _FakeAdata({"expression_contract": _valid_contract(counts_validated="yes")})
+    with pytest.raises(ValueError, match="counts_validated must be bool"):
+        validate_expression_contract(adata)
+
+
+@pytest.mark.parametrize("bad_check", ["partial", "sampled", None, 0])
+def test_validate_expression_contract_invalid_integer_check(bad_check) -> None:
+    adata = _FakeAdata({"expression_contract": _valid_contract(counts_integer_check=bad_check)})
+    with pytest.raises(ValueError, match="counts_integer_check"):
+        validate_expression_contract(adata)
+
+
+def test_validate_expression_contract_valid_integer_checks() -> None:
+    for check in ("full", "blockwise"):
+        adata = _FakeAdata({"expression_contract": _valid_contract(counts_integer_check=check)})
+        validate_expression_contract(adata)  # 不抛
+
+
+@pytest.mark.parametrize("bad_soupx", ["counts_soupx_old", "soupx", 0, False])
+def test_validate_expression_contract_invalid_soupx_layer(bad_soupx) -> None:
+    adata = _FakeAdata({"expression_contract": _valid_contract(soupx_layer=bad_soupx)})
+    with pytest.raises(ValueError, match="soupx_layer"):
+        validate_expression_contract(adata)
+
+
+def test_validate_expression_contract_soupx_layer_none_allowed() -> None:
+    adata = _FakeAdata({"expression_contract": _valid_contract(soupx_layer=None)})
+    validate_expression_contract(adata)  # 不抛
+
+
+def test_validate_expression_contract_soupx_layer_counts_soupx_allowed() -> None:
+    adata = _FakeAdata({"expression_contract": _valid_contract(soupx_layer="counts_soupx")})
+    validate_expression_contract(adata)  # 不抛
+
+
+def test_validate_expression_contract_processing_history_not_list() -> None:
+    adata = _FakeAdata({"expression_contract": _valid_contract(processing_history="step1")})
+    with pytest.raises(ValueError, match="processing_history must be a list"):
+        validate_expression_contract(adata)
+
+
+@pytest.mark.parametrize("bad_stage", ["04", "1", "A", "", None])
+def test_validate_expression_contract_invalid_stage(bad_stage) -> None:
+    adata = _FakeAdata({"expression_contract": _valid_contract(stage=bad_stage)})
+    with pytest.raises(ValueError, match="stage must be one of"):
+        validate_expression_contract(adata)
+
+
+def test_validate_expression_contract_stage_matches_expected() -> None:
+    adata = _FakeAdata({"expression_contract": _valid_contract(stage="01")})
+    validate_expression_contract(adata, stage="01")  # 不抛
+
+
+def test_validate_expression_contract_stage_expected_mismatch() -> None:
+    adata = _FakeAdata({"expression_contract": _valid_contract(stage="02")})
+    with pytest.raises(ValueError, match="expected '03'"):
+        validate_expression_contract(adata, stage="03")
+
+
+def test_validate_expression_contract_empty_counts_layer() -> None:
+    adata = _FakeAdata({"expression_contract": _valid_contract(counts_layer="")})
+    with pytest.raises(ValueError, match="counts_layer must be a non-empty string"):
+        validate_expression_contract(adata)
+
+
+def test_validate_expression_contract_returns_independent_dict() -> None:
+    contract = _valid_contract()
+    adata = _FakeAdata({"expression_contract": contract})
+    result = validate_expression_contract(adata)
+    assert result is not contract
+    assert result == contract
+
+
+def test_validate_expression_contract_x_scale_normalized_log1p() -> None:
+    adata = _FakeAdata({"expression_contract": _valid_contract(x_scale="normalized_log1p")})
+    validate_expression_contract(adata)
+
+    with pytest.raises(ValueError, match="expected 'raw_counts'"):
+        validate_expression_contract(adata, expected_scale="raw_counts")
+
+
+# ---- aggregate_method_status ------------------------------------------------------
+
+
+def test_aggregate_all_success() -> None:
+    result = aggregate_method_status({
+        "harmony": MethodStatus.SUCCESS,
+        "scvi": MethodStatus.SUCCESS,
+    })
+    assert result == {"harmony": MethodStatus.SUCCESS, "scvi": MethodStatus.SUCCESS}
+
+
+def test_aggregate_skipped_excluded() -> None:
+    result = aggregate_method_status({
+        "pca": MethodStatus.SUCCESS,
+        "scvi": MethodStatus.SKIPPED_BY_USER,
+        "harmony": MethodStatus.SUCCESS,
+    })
+    assert "scvi" not in result
+    assert result["pca"] is MethodStatus.SUCCESS
+    assert result["harmony"] is MethodStatus.SUCCESS
+
+
+def test_aggregate_failed_included() -> None:
+    result = aggregate_method_status({
+        "scvi": MethodStatus.FAILED,
+    })
+    assert result == {"scvi": MethodStatus.FAILED}
+
+
+def test_aggregate_unavailable_included() -> None:
+    result = aggregate_method_status({
+        "scanvi": MethodStatus.UNAVAILABLE,
+    })
+    assert result == {"scanvi": MethodStatus.UNAVAILABLE}
+
+
+def test_aggregate_mixed_statuses() -> None:
+    result = aggregate_method_status({
+        "pca": MethodStatus.SUCCESS,
+        "harmony": MethodStatus.SUCCESS,
+        "scvi": MethodStatus.FAILED,
+        "scanvi": MethodStatus.SKIPPED_BY_USER,
+        "bbknn": MethodStatus.UNAVAILABLE,
+    })
+    assert result == {
+        "pca": MethodStatus.SUCCESS,
+        "harmony": MethodStatus.SUCCESS,
+        "scvi": MethodStatus.FAILED,
+        "bbknn": MethodStatus.UNAVAILABLE,
+    }
+
+
+def test_aggregate_empty_input() -> None:
+    assert aggregate_method_status({}) == {}
+
+
+def test_aggregate_all_skipped() -> None:
+    result = aggregate_method_status({
+        "scvi": MethodStatus.SKIPPED_BY_USER,
+        "scanvi": MethodStatus.SKIPPED_BY_USER,
+    })
+    assert result == {}
+
+
+def test_aggregate_accepts_string_status_values() -> None:
+    result = aggregate_method_status({
+        "pca": "success",
+        "scvi": "failed",
+        "harmony": "skipped_by_user",
+    })
+    assert result["pca"] is MethodStatus.SUCCESS
+    assert result["scvi"] is MethodStatus.FAILED
+    assert "harmony" not in result
+
+
+def test_aggregate_result_usable_by_determine_stage_status() -> None:
+    """aggregate_method_status 输出可直接传入 determine_stage_status。"""
+    required = aggregate_method_status({
+        "pca": MethodStatus.SUCCESS,
+        "harmony": MethodStatus.SUCCESS,
+        "scvi": MethodStatus.SKIPPED_BY_USER,
+    })
+    status = determine_stage_status(required, {"counts_valid": True})
+    assert status is StageStatus.SUCCESS
+
+
+def test_aggregate_with_failures_causes_determine_stage_status_failed() -> None:
+    """含 FAILED 的聚合结果会让 determine_stage_status 返回 FAILED。"""
+    required = aggregate_method_status({
+        "pca": MethodStatus.SUCCESS,
+        "scvi": MethodStatus.FAILED,
+    })
+    status = determine_stage_status(required, {"counts_valid": True})
+    assert status is StageStatus.FAILED
