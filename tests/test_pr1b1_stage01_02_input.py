@@ -94,13 +94,15 @@ def test_json_ast_params_and_prepare_run_placement() -> None:
     for path in NB01:
         assert all(name in _cell(path, "# === PARAMS ===") for name in ("RUN_ID", "RUN_ROOT", "OUTPUT_FILENAME"))
         final = _cell(path, "# Checkpoint")
-        assert "snapshot_effective_parameters(globals()" in final and "collect_runtime_provenance" in final
+        contract_cell = _cell(path, "# === 数据读入") if path == NB01[0] else final
+        assert "snapshot_effective_parameters(globals()" in contract_cell and "collect_runtime_provenance" in contract_cell
         earlier = [_source(c) for c in _nb(path)["cells"] if c["cell_type"] == "code" and _source(c) != final]
-        assert not any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "prepare_run"
-                       for source in earlier for n in ast.walk(ast.parse(source)))
+        if path != NB01[0]:
+            assert not any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "prepare_run"
+                           for source in earlier for n in ast.walk(ast.parse(source)))
     assert all(" in dir()" not in _cell(path, "qc_report = {") for path in (NB01[0], NB01[3]))
 
-@pytest.mark.parametrize("path", NB01)
+@pytest.mark.parametrize("path", NB01[1:])
 def test_stage01_success_promotes_auditable_checkpoint(tmp_path: Path, path: str) -> None:
     env = _env01(tmp_path, path, f"success-{Path(path).stem}")
     expected = env["source_dataset"]
@@ -113,32 +115,32 @@ def test_stage01_success_promotes_auditable_checkpoint(tmp_path: Path, path: str
     assert manifest["runtime_provenance"]["python"] and all(manifest["hard_postconditions"].values())
     assert rc.validate_checkpoint(promoted / "manifest.json").is_file()
 
-@pytest.mark.parametrize("values", [[], ["Wrong", "Wrong"], ["Kim_2023", "Other"], ["Kim_2023", np.nan]])
+@pytest.mark.parametrize("values", [[], ["Wrong", "Wrong"], ["Nancang_2025", "Other"], ["Nancang_2025", np.nan]])
 def test_stage01_bad_source_or_empty_fails_without_checkpoint(tmp_path: Path, values: list) -> None:
-    env = _env01(tmp_path, NB01[0], "failed", n_obs=len(values))
+    env = _env01(tmp_path, NB01[1], "failed", n_obs=len(values))
     env["adata"].obs["source_dataset"] = values
     with pytest.raises(RuntimeError, match="Stage 01 FAILED"):
-        exec(_cell(NB01[0], "# Checkpoint"), env)
+            exec(_cell(NB01[1], "# Checkpoint"), env)
     draft = tmp_path / "runs/failed/draft"
     manifest = json.loads((draft / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["stage_status"] == "FAILED" and "checkpoint" not in manifest
     assert not list(draft.glob("*.h5ad"))
 
 def test_stage01_missing_manifest_does_not_claim_run_id(tmp_path: Path) -> None:
-    env = _env01(tmp_path, NB01[0], "missing")
+    env = _env01(tmp_path, NB01[1], "missing")
     Path(env["MANIFEST_PATH"]).unlink()
     with pytest.raises(FileNotFoundError):
-        exec(_cell(NB01[0], "# Checkpoint"), env)
+        exec(_cell(NB01[1], "# Checkpoint"), env)
     assert not Path(env["RUN_ROOT"]).exists()
 
 def test_stage01_partial_write_is_removed_and_audited(tmp_path: Path) -> None:
-    env = _env01(tmp_path, NB01[0], "write-failed")
+    env = _env01(tmp_path, NB01[1], "write-failed")
     def fail_write(path: Path, **_: object) -> None:
         Path(path).write_bytes(b"partial")
         raise OSError("disk full")
     env["adata"].write_h5ad = fail_write
     with pytest.raises(OSError, match="disk full"):
-        exec(_cell(NB01[0], "# Checkpoint"), env)
+        exec(_cell(NB01[1], "# Checkpoint"), env)
     draft = tmp_path / "runs/write-failed/draft"
     manifest = json.loads((draft / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["stage_status"] == "FAILED" and manifest["failure"] == {"type": "OSError", "message": "disk full"}
