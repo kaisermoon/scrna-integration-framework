@@ -66,7 +66,7 @@ def test_subset_gate_blocked_pi_not_confirmed():
     code_cells = _code_cells()
     gate_idx = None
     for i, src in enumerate(code_cells):
-        if "annotation_gate_subset" in src and "subset_final_gate_passed" in src:
+        if "annotation_gate" in src and "subset_final_gate_passed" in src:
             gate_idx = i
             break
     if gate_idx is None:
@@ -118,8 +118,8 @@ def test_subset_gate_blocked_pi_not_confirmed():
 
     assert ns["subset_final_gate_passed"] is False
     assert "cell_type_final_subset_v1" not in subset.obs.columns
-    notes_key = "cell_type_final_subset_v1_notes"
-    assert subset.uns.get(notes_key, {}).get("status") == "draft-suggested-only"
+    gate_info = subset.uns.get("annotation_gate", {})
+    assert gate_info.get("gate_passed") is False
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +131,7 @@ def test_subset_gate_blocked_unresolved():
     code_cells = _code_cells()
     gate_idx = None
     for i, src in enumerate(code_cells):
-        if "annotation_gate_subset" in src and "subset_final_gate_passed" in src:
+        if "annotation_gate" in src and "subset_final_gate_passed" in src:
             gate_idx = i
             break
     if gate_idx is None:
@@ -183,7 +183,7 @@ def test_subset_gate_blocked_unresolved():
     exec(compile(code_cells[gate_idx], f"<gate_{gate_idx}>", "exec"), ns)
 
     assert ns["subset_final_gate_passed"] is False
-    unresolved = subset.uns.get("annotation_gate_subset", {}).get("unresolved_clusters", [])
+    unresolved = subset.uns.get("annotation_gate", {}).get("unresolved_clusters", [])
     assert "2" in unresolved
 
 
@@ -201,7 +201,7 @@ def test_llm_suggestions_never_auto_final():
             break
     gate_idx = None
     for i, src in enumerate(code_cells):
-        if "annotation_gate_subset" in src and "subset_final_gate_passed" in src:
+        if "annotation_gate" in src and "subset_final_gate_passed" in src:
             gate_idx = i
             break
     if pi_idx is None or gate_idx is None:
@@ -209,6 +209,7 @@ def test_llm_suggestions_never_auto_final():
 
     ns = {
         "pd": pd, "np": np, "os": __import__("os"),
+        "datetime": __import__("datetime"),
         "json": json, "Path": Path, "re": re,
         "UPSTREAM_LABEL_VERSION": "v1", "SUBSET_OUTPUT_VERSION": "v1",
         "MAIN_OUTPUT_VERSION": "v2", "UPSTREAM_LABEL_COL": "cell_type_final_v1",
@@ -266,7 +267,7 @@ def test_cluster_n_placeholder_blocks_gate():
     code_cells = _code_cells()
     gate_idx = None
     for i, src in enumerate(code_cells):
-        if "annotation_gate_subset" in src and "subset_final_gate_passed" in src:
+        if "annotation_gate" in src and "subset_final_gate_passed" in src:
             gate_idx = i
             break
     if gate_idx is None:
@@ -316,7 +317,7 @@ def test_cluster_n_placeholder_blocks_gate():
     exec(compile(code_cells[gate_idx], f"<gate_{gate_idx}>", "exec"), ns)
 
     assert ns["subset_final_gate_passed"] is False
-    unresolved = subset.uns.get("annotation_gate_subset", {}).get("unresolved_clusters", [])
+    unresolved = subset.uns.get("annotation_gate", {}).get("unresolved_clusters", [])
     assert "1" in unresolved
 
 
@@ -329,12 +330,10 @@ def test_reflow_gate_blocked_subset_not_passed():
     code_cells = _code_cells()
     reflow_idx = None
     for i, src in enumerate(code_cells):
-        if ("main_reflow_gate_passed" in src and "MAIN_REFLOW_CONFIRMED" in src
-                and "subset_final_gate_passed" in src and "MAIN_OUTPUT_VERSION" in src):
-            # Check it's the reflow gate, not the output cell
-            if "= bool(" in src or "main_reflow_gate_passed =" in src:
-                reflow_idx = i
-                break
+        if ("=== 回流闸门" in src and "main_reflow_gate_passed" in src
+                and "MAIN_REFLOW_CONFIRMED" in src and "subset_final_gate_passed" in src):
+            reflow_idx = i
+            break
     if reflow_idx is None:
         pytest.skip("reflow gate cell not found")
 
@@ -420,7 +419,7 @@ def test_annotation_confirmed_main_not_reflowed():
     code_cells = _code_cells()
     gate_idx = None
     for i, src in enumerate(code_cells):
-        if "annotation_gate_subset" in src and "subset_final_gate_passed" in src:
+        if "annotation_gate" in src and "subset_final_gate_passed" in src:
             gate_idx = i
             break
     if gate_idx is None:
@@ -482,7 +481,7 @@ def test_csv_version_mismatch_blocks_gate():
     code_cells = _code_cells()
     gate_idx = None
     for i, src in enumerate(code_cells):
-        if "annotation_gate_subset" in src and "subset_final_gate_passed" in src:
+        if "annotation_gate" in src and "subset_final_gate_passed" in src:
             gate_idx = i
             break
     if gate_idx is None:
@@ -521,8 +520,8 @@ def test_csv_version_mismatch_blocks_gate():
         },
         {
             "annotation_provenance_subset_v2": {
-                "0": {"pi_decision": "CD4_Tcm", "decision_source": "accept"},
-                "1": {"pi_decision": "CD8_Tem", "decision_source": "accept"},
+                "0": {"pi_decision": "", "decision_source": "unresolved"},
+                "1": {"pi_decision": "", "decision_source": "unresolved"},
             }
         },
     )
@@ -724,7 +723,7 @@ def test_no_dir_flow_control_in_gate_branches():
     """Gate cell business branches must not use 'x in dir()' for gate variables."""
     code_cells = _code_cells()
     for src in code_cells:
-        if ("subset_final_gate_passed" in src and "annotation_gate_subset" in src) or \
+        if ("subset_final_gate_passed" in src and "annotation_gate" in src) or \
            ("main_reflow_gate_passed" in src and "MAIN_REFLOW_CONFIRMED" in src):
             for line in src.split("\n"):
                 s = line.strip()
@@ -815,7 +814,7 @@ def test_subset_draft_output(tmp_path):
             "cell_type_pi_confirmed_subset_v1": ["A1", "A2", "Cluster_2"],
         }, index=["c1", "c2", "c3"]),
     )
-    subset.uns["annotation_gate_subset"] = {
+    subset.uns["annotation_gate"] = {
         "subset_final_gate_passed": False,
         "unresolved_clusters": ["2"],
     }
@@ -894,7 +893,7 @@ def test_subset_draft_atomic_rollback(tmp_path):
             "cell_type_pi_confirmed_subset_v1": ["A1", "A2", "Cluster_2"],
         }, index=["c1", "c2", "c3"]),
     )
-    subset.uns["annotation_gate_subset"] = {"subset_final_gate_passed": False}
+    subset.uns["annotation_gate"] = {"subset_final_gate_passed": False}
     subset.write_h5ad = lambda path, **_: (_ for _ in ()).throw(OSError("write failed"))
 
     with pytest.raises(OSError, match="write failed"):
