@@ -83,6 +83,7 @@ def _env(tmp_path: Path, embedding: np.ndarray | None) -> tuple[dict, _Adata]:
         ),
         "UPSTREAM_RUN_ROOT": str(upstream_root),
         "UPSTREAM_RUN_ID": upstream_id,
+        "StageStatus": rc.StageStatus,
     }
     setup = _cell("# === 只读取 promoted Stage 03 上游 ===")
     start = setup.index("# === 只读取 promoted Stage 03 上游 ===")
@@ -114,7 +115,18 @@ def test_notebook_contract_is_deferred_and_does_not_select_or_promote() -> None:
     params = _cell("# === PARAMS ===")
     final = _cell("# === Stage 04 draft checkpoint")
     assert all(name in params for name in ("RUN_ROOT", "RUN_ID", "OUTPUT_FILENAME"))
-    assert "OUTPUT_PATH" not in params and "SELECTED_EMBEDDING" not in "\n".join(code)
+    assert "OUTPUT_PATH" not in params
+    # PARAMS 中 SELECTED_EMBEDDING = None 是用户默认值，不等于自动选择。
+    # 用 AST 检查：除 PARAMS 外任何 cell 不得有对 SELECTED_EMBEDDING 的赋值。
+    for source in code:
+        if "# === PARAMS ===" in source:
+            continue
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.Assign):
+                for tgt in node.targets:
+                    assert not (isinstance(tgt, ast.Name)
+                                and tgt.id == "SELECTED_EMBEDDING"), \
+                        "除 PARAMS 外不得自动给 SELECTED_EMBEDDING 赋值"
     assert "promote_run" not in final
     assert not any(
         isinstance(node, ast.Call) and getattr(node.func, "id", None) == "prepare_run"
