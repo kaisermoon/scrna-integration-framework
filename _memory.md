@@ -16,6 +16,21 @@ updated: "2026-07-15"
 
 **phase = analysis**。2026-06-05 由 `/kickoff` 新建。代码工程完成、23-stage 管线打通，早已过 planning 阶段。
 
+## 💾 会话保存点（2026-07-15 第二次，P2+P3 生产整改主体全完成，main = `2175475`）
+
+**P0-P3 整改主体全部合并完成。** 本轮在 P1 之后推进 P2、P3（PR #173-176），main = `2175475`，全 1132 passed（+16 skipped 为本地无 R 环境的 SoupX 测试，CI 有 R 会真跑），零回归。
+
+- **P2-a（04_embedded，PR #174）**：决策4 scVI/scANVI 输入六项严格校验（shape/基因轴对齐/有限非负/近整数/每批次文库/契约元数据），任一失败标记 counts 依赖方法 unavailable 不静默降级 + UX-1 方法勾选 + selected_embedding 决策 cell。**一轮返工**：coder 首版校验2「基因顺序未漂移」是空校验（`_check2 = list(var_names)==list(var_names)` 恒真同语反复 + `_vnames_correct=True` 硬编码，且 `_check2` 从未进 `_all_checks`），reviewer 对抗式抓出，改为真实基因轴宽度对齐 + 基因名唯一性校验。
+- **P2-b（05_clustered，PR #173）**：UX-2 逐 resolution 来源构成表 + 稳定性指标 + selected_cluster_key 决策 cell。**未提交事故**：coder 回报的 SHA 是 P1 旧合并 commit（工作全在 worktree 未 commit），reviewer 抓出 diff 为空，主 Agent 自己 commit 两文件（reviewer 已验证实质无误）后补救。
+- **P3-b（06_annotated，PR #175）**：决策6 的 6a-6d 单 PR——四版本溯源字段（marker/llm_suggested/pi_confirmed/final）+ suggested 不自动落地 + GREEN 不自动 final + 未确认簇只填 Cluster_N 占位 + PI_CONFIRMED 全簇闸门（任一簇未确认→NEEDS_REVIEW 只写 draft，`needs_review = not final_gate_passed`）。
+- **P3-c（06c_subset，PR #176）**：决策6e subset 注释闸门 + 回流闸门（`MAIN_REFLOW_CONFIRMED` + 主版本刻意 bump 才回流）+ MAIN/ANNOTATION 版本解耦。字段与 P3-b 镜像对齐（`SUBSET_` 前缀区分作用域，共享 annotation_gate/decision_source/provenance 模式）。
+
+**workflow spec 传递 bug（本轮新教训）**：P3 首轮两个 spec agent 返回空，但 `specs.filter(Boolean)` 过滤的是 `{leaf,spec}` 对象（永远 truthy），空 spec 照样流进 coder → coder 盲写决策6 安全闸（Cluster_N 闸门形同虚设、P3-c 没做只重复做了 06_annotated）。修法固化：① spec 阶段加非空重试守卫（>200 字符，最多3次，仍空则丢弃该叶子不流进 coder）② coder prompt 自足化（显式写入 notebook/test/scope，spec 作为补充而非唯一信息源）。
+
+**空跑测试（PI-final 安全闸必须亲验，本轮反复出现）**：P3-b/P3-c 的闸门守卫测试初版都是空跑——P3-b 用 AST 搜字面量 `cell_type_final_` 赋值目标但代码用变量 `_final_col` 赋值（搜不到恒过）；P3-c 搜 `annotation_gate_subset` 但实际 key 是 `annotation_gate`（全 skip）、回流测试匹配到 PARAMS cell 而非 gate cell（断言恒真）。**主 Agent 对每道安全闸都亲手做破坏验证**（改 gate 条件为恒真/恒假，确认对应测试真 FAIL，再 git 还原）——不信 coder 自报的破坏验证。教训：安全闸的守卫测试空跑比没有更危险（给"红线被守护"的假象）。
+
+**下一步**：UX-3 收尾（跨 run 比较表 + run 管理 promoted/pinned/superseded + 清理流程，改 run_contract.py + 04/05/06）≈3-4 叶子 + B9 下游版本字面量收敛（07_downstream D01-D14 的 53 处硬编码版本号）≈1 低风险 PR。PI 闸门项（需 PI 亲自）：scANVI 真跑、SoupX 校正偏差量化、LLM 多模型共识、第一波生物学结果。开发循环优化建议见项目记忆前述「开发流程优化待办」（merge queue+auto-merge、拆共享测试 per-notebook、CI 作唯一全量门）。
+
 ## 💾 会话保存点（2026-07-15，P1 生产整改全完成，main = `8ee782e`）
 
 **P1 全阶段（a-e + P3-a）合并完成**（PR #158-171）：决策 3（SoupX）、决策 7（LLM 路由键）、决策 8（doublet 三态）、UX guided 骨架全部落地。分三波：
