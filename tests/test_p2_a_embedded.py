@@ -159,6 +159,109 @@ def test_scvi_validation_block_on_failure() -> None:
 
 
 # ============================================================================
+# 决策4 · 校验2：counts 基因轴对齐是真实校验（非同语反复恒真）
+# ============================================================================
+
+def _validation_env(counts, n_vars, var_names,
+                    counts_key="counts", counts_source="layers[counts]") -> dict:
+    """构建 scVI 严格校验 cell 的执行环境。
+
+    counts 作为 layers[counts_key] 注入，var_names / n_vars 独立设置——
+    这样可以构造"counts 基因轴与 var_names 不一致"的漂移场景。
+    不注入 BATCH_KEY 对应 obs 列，使校验 5 走跳过分支（保持 True），
+    从而隔离出校验 2 的真伪。
+    """
+    env = _base_env()
+    n_obs = counts.shape[0]
+    adata = SimpleNamespace(
+        obs=pd.DataFrame(index=range(n_obs)), uns={}, obsm={}, varm={},
+        layers={counts_key: counts},
+        n_obs=n_obs, n_vars=n_vars,
+        var_names=pd.Index(list(var_names)),
+    )
+    env["adata"] = adata
+    env["_counts_key"] = counts_key
+    env["_counts_source"] = counts_source
+    return env
+
+
+def _int_counts(n_obs, n_cols):
+    """构造整数、有限非负的 CSR float32 counts——除校验 2 外各项均可通过。"""
+    return sp.csr_matrix(np.ones((n_obs, n_cols), dtype=np.float32))
+
+
+def test_check2_source_is_not_tautology() -> None:
+    """校验 2 源码不得是自比自的恒真同语反复，也不得硬编码 _vnames_correct=True。"""
+    source = _find_cell("# === scVI/scANVI 输入严格校验（决策 4）===")
+    # 旧实现的恒真同语反复与硬编码真值必须已被移除
+    assert "list(adata.var_names) == list(adata.var_names)" not in source
+    assert "_vnames_correct = True" not in source
+    # 新实现基于真实的基因轴宽度与去重检查
+    assert "_c.shape[1] == len(_var_names)" in source
+    assert "_vnames_correct = _axis_match and _no_dup_genes" in source
+    # 校验 2 结果进入汇总判断
+    assert "_all_checks = [_check1, _vnames_correct," in source
+
+
+def test_check2_passes_when_axis_aligned() -> None:
+    """counts 基因轴与 var_names 完全一致时，校验 2 通过且六项全过。"""
+    counts = _int_counts(4, 10)
+    env = _validation_env(counts, n_vars=10,
+                          var_names=[f"gene_{i}" for i in range(10)])
+    exec(_find_cell("# === scVI/scANVI 输入严格校验（决策 4）==="), env)
+    checks = env["adata"].uns["scvi_validation"]["checks"]
+    assert checks["gene_order"] is True
+    assert env["_counts_valid"] is True
+
+
+def test_check2_fails_on_gene_axis_width_drift() -> None:
+    """counts 列数与 var_names 长度不一致（基因错位）时，校验 2 FAIL 并阻断。"""
+    # counts 列数=10 与 n_vars=10 一致（校验 1 通过），但 var_names 长度=12
+    # 表示 n_vars 与 var_names 失同步——校验 2 必须捕获此漂移。
+    counts = _int_counts(4, 10)
+    env = _validation_env(counts, n_vars=10,
+                          var_names=[f"gene_{i}" for i in range(12)])
+    exec(_find_cell("# === scVI/scANVI 输入严格校验（决策 4）==="), env)
+    checks = env["adata"].uns["scvi_validation"]["checks"]
+    assert checks["shape"] is True          # 校验 1 通过，隔离出校验 2
+    assert checks["gene_order"] is False     # 校验 2 真实地为 False
+    assert env["_counts_valid"] is False     # 阻断：决策 4 不静默降级
+    assert any("基因轴" in r for r in env["_counts_failure_reasons"])
+
+
+def test_check2_fails_on_duplicate_gene_names() -> None:
+    """var_names 含重复基因名（基因轴索引歧义）时，校验 2 FAIL 并阻断。"""
+    counts = _int_counts(4, 10)
+    _dup_names = [f"gene_{i}" for i in range(9)] + ["gene_0"]  # gene_0 重复
+    env = _validation_env(counts, n_vars=10, var_names=_dup_names)
+    exec(_find_cell("# === scVI/scANVI 输入严格校验（决策 4）==="), env)
+    checks = env["adata"].uns["scvi_validation"]["checks"]
+    assert checks["shape"] is True
+    assert checks["gene_order"] is False
+    assert env["_counts_valid"] is False
+    assert any("重复基因名" in r for r in env["_counts_failure_reasons"])
+
+
+def test_validation_boundary_path_no_nameerror() -> None:
+    """counts 层不可用（_counts_key=None）时不抛 NameError，仍写出全 False 校验。"""
+    env = _base_env()
+    env["adata"] = SimpleNamespace(
+        obs=pd.DataFrame(index=range(4)), uns={}, obsm={}, varm={}, layers={},
+        n_obs=4, n_vars=10,
+        var_names=pd.Index([f"gene_{i}" for i in range(10)]),
+    )
+    env["_counts_key"] = None
+    env["_counts_source"] = None
+    # 边界路径只定义 _counts_valid/_counts_failure_reasons，
+    # 若 _check1.._check6 未预初始化则 uns 写入会 NameError。
+    exec(_find_cell("# === scVI/scANVI 输入严格校验（决策 4）==="), env)
+    checks = env["adata"].uns["scvi_validation"]["checks"]
+    assert checks["gene_order"] is False
+    assert checks["shape"] is False
+    assert env["_counts_valid"] is False
+
+
+# ============================================================================
 # UX-1：方法勾选 + 前置条件检查
 # ============================================================================
 
