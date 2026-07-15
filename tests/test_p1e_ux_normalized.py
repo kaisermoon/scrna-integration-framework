@@ -69,8 +69,9 @@ def _load_nb() -> dict:
 
 def _load_orig_nb() -> dict:
     """从 git 加载 main 的原始 notebook JSON。"""
+    # 从当前 commit 的父提交获取原始 notebook（本 leaf 只改 03）
     result = subprocess.run(
-        ["git", "show", f"HEAD:notebooks/03_normalized.ipynb"],
+        ["git", "show", f"HEAD~1:notebooks/03_normalized.ipynb"],
         capture_output=True, text=True, check=True,
         cwd=str(_NB_PATH.parent.parent),
     )
