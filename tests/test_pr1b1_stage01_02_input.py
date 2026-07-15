@@ -75,6 +75,23 @@ class _Adata:
     def var_names_make_unique(self) -> None:
         pass
 
+def _params_source(path: str) -> str:
+    """收集 notebook 全部参数 cell 源码（兼容旧式单 cell 与新式四组 cell）。"""
+    try:
+        return _cell(path, "# === PARAMS ===")
+    except AssertionError:
+        # P1-e: PARAMS 四组化后，从各组 code cell 收集参数
+        nb = _nb(path)
+        param_cells = [
+            c for c in nb["cells"]
+            if (c.get("id", "").startswith("p1e_params_g") and c.get("id", "").endswith("_code"))
+            or c.get("id") == "aae03603"
+        ]
+        if not param_cells:
+            raise
+        return "\n".join(_source(c) for c in param_cells)
+
+
 def _env01(tmp: Path, path: str, run_id: str, n_obs: int = 2) -> dict:
     env: dict = {}
     exec(_params_source(path), env)
