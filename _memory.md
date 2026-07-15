@@ -2,8 +2,8 @@
 title: "项目记忆：scRNA-seq整合分析框架"
 type: project-memory
 project_id: "scrna-integration-framework"
-last_session: "2026-07-14"
-updated: "2026-07-14"
+last_session: "2026-07-15"
+updated: "2026-07-15"
 ---
 
 # 项目记忆：scRNA-seq整合分析框架
@@ -15,6 +15,21 @@ updated: "2026-07-14"
 ## 当前状态
 
 **phase = analysis**。2026-06-05 由 `/kickoff` 新建。代码工程完成、23-stage 管线打通，早已过 planning 阶段。
+
+## 💾 会话保存点（2026-07-15，P1 生产整改全完成，main = `8ee782e`）
+
+**P1 全阶段（a-e + P3-a）合并完成**（PR #158-171）：决策 3（SoupX）、决策 7（LLM 路由键）、决策 8（doublet 三态）、UX guided 骨架全部落地。分三波：
+- **wave-1（7 叶子并行）**：P3-a（llm_config 路由键改唯一 group，修多 group 同 provider 覆盖）、P1-a（scripts/soupx_run.R 三 bug 修复 + status.json + 三级 autoEstCont fallback）、P1-c×4（kim/nancang/nowicki/yue + template 的 doublet 三态 singlet/uncertain/doublet + doublet_include + needs_review）、P1-d（02_merged 按 doublet_include 构建整合对象）。
+- **wave-2（P1-b）**：01_nancang SoupX 写 counts_soupx 层（不覆盖 layers["counts"]）+ 校正后重算 QC + doublet 移到校正后。
+- **wave-3（P1-e×6）**：01(kim/nancang/nowicki/yue)+02+03 的 UX guided 骨架——PARAMS 四组化（数据源/QC阈值/方法开关/输出版本）+ preflight 校验 cell + 科学参数四要素注释（含义/默认依据/调大调小影响/何时改）。
+
+**关键 doublet 契约模式**：checkpoint 的 doublet hard_postconditions 必须用 `_hd = "doublet_xxx" in adata.obs.columns` guard 条件化（`if _hd else True`），否则共享测试 test_pr1b1 的合成 adata（无 doublet 列）会 KeyError/NameError。kim 首创、nowicki/yue 修复时照搬。
+
+**共享参数化测试耦合（P0 教训重演并固化）**：P1-e 中 nancang+nowicki 都改 test_pr1b1 的 _params_source、merged+normalized 都改 test_pr1b2——独立 worktree 里 rebase 第二个必冲突（或坏自动合并产生重复 helper 定义）。合并策略：独立文件叶子先并行合，共享测试的叶子对内串行（先合一个、第二个 rebase 解冲突委派 coder）。教训：**测试禁止依赖 git commit SHA**（`git show <sha>` 在 CI shallow-clone 下 exit 128），受保护 cell 用 marker 静态断言而非 git 差分。
+
+**fabrication 现象升级**：本轮多次出现工具结果回显造假——push/PR/merge 的成功回显与 `git ls-remote`/`gh api` 权威真相矛盾（假 PR 号、假 MERGED、假 worktree prune）。铁律：**所有 push/merge/合并落地一律以 `git ls-remote origin` + `gh api ...mergeCommit/mergedAt` 权威核实，绝不信命令回显**；worktree prune 后 `git worktree list` 复核。
+
+**技术债清零**：全 1043 测试通过（零回归），全部 P1-e/P1-b worktree + 分支清理完毕，main 干净。**下一步 P2**（04/05 UX-1/UX-2 + 决策4 scVI 严格校验），依赖 P1 已全部满足。
 
 ## 💾 会话保存点（2026-07-14，P0 生产整改全完成，main = `e682a0d`）
 
