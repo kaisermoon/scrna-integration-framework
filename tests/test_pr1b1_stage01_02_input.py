@@ -35,28 +35,40 @@ def _cell(path: str, marker: str) -> str:
 
 
 def _params_source(path: str) -> str:
-    """返回 notebook 中全部 PARAMS 参数定义的拼接源码（兼容新旧 PARAMS 结构）。
+    """返回 notebook 中全部 PARAMS 参数定义的拼接源码（兼容四组化与旧式单 cell 三种结构）。
 
-    P1-e 将 01_nancang 的单 cell PARAMS 拆为四组（每组 1 md header + 1 code cell）；
-    其他 notebook 仍使用旧结构（单 # === PARAMS === cell）。此函数自动适配两种结构。
+    P1-e 将各 01 notebook 的单 cell PARAMS 拆为四组，但拆分方式因 notebook 而异，
+    因此按以下优先级依次尝试，命中即返回：
+    1. group-marker 定位（01_nancang）：以 markdown header
+       `### 1. 数据源` / `### 2. QC 阈值` / `### 3. 方法开关` / `### 4. 输出版本与运行标识`
+       定位每组，取该 header 紧邻的下一个 code cell。
+    2. cell-id 定位（01_nowicki）：收集 id 为 `aae03603` 或形如 `p1e_params_g*_code`
+       的 code cell（其四组无 group-marker，靠固定 cell-id 标识）。
+    3. 旧式单 cell（01_kim / 01_yue）：回退到单个 `# === PARAMS ===` cell。
     """
     nb = _nb(path)
+    cells = nb["cells"]
     group_markers = [
         "### 1. 数据源", "### 2. QC 阈值",
         "### 3. 方法开关", "### 4. 输出版本与运行标识",
     ]
-    found_group = False
-    sources = []
-    for i, cell in enumerate(nb["cells"]):
-        src = _source(cell)
-        if any(m in src for m in group_markers) and cell.get("cell_type") == "markdown":
-            found_group = True
-            # 下一个 cell 是对应的 code cell
-            if i + 1 < len(nb["cells"]) and nb["cells"][i + 1].get("cell_type") == "code":
-                sources.append(_source(nb["cells"][i + 1]))
-    if found_group and sources:
-        return "\n".join(sources)
-    # fallback: 旧结构单 # === PARAMS === cell
+    # 1. group-marker 定位（nancang）：md header 的下一个 code cell
+    group_sources = []
+    for i, cell in enumerate(cells):
+        if cell.get("cell_type") == "markdown" and any(m in _source(cell) for m in group_markers):
+            if i + 1 < len(cells) and cells[i + 1].get("cell_type") == "code":
+                group_sources.append(_source(cells[i + 1]))
+    if group_sources:
+        return "\n".join(group_sources)
+    # 2. cell-id 定位（nowicki）：aae03603 + p1e_params_g*_code
+    id_sources = [
+        _source(c) for c in cells
+        if (c.get("id", "").startswith("p1e_params_g") and c.get("id", "").endswith("_code"))
+        or c.get("id") == "aae03603"
+    ]
+    if id_sources:
+        return "\n".join(id_sources)
+    # 3. 旧式单 cell（kim / yue）
     return _cell(path, "# === PARAMS ===")
 
 class _Adata:
@@ -74,23 +86,6 @@ class _Adata:
 
     def var_names_make_unique(self) -> None:
         pass
-
-def _params_source(path: str) -> str:
-    """收集 notebook 全部参数 cell 源码（兼容旧式单 cell 与新式四组 cell）。"""
-    try:
-        return _cell(path, "# === PARAMS ===")
-    except AssertionError:
-        # P1-e: PARAMS 四组化后，从各组 code cell 收集参数
-        nb = _nb(path)
-        param_cells = [
-            c for c in nb["cells"]
-            if (c.get("id", "").startswith("p1e_params_g") and c.get("id", "").endswith("_code"))
-            or c.get("id") == "aae03603"
-        ]
-        if not param_cells:
-            raise
-        return "\n".join(_source(c) for c in param_cells)
-
 
 def _env01(tmp: Path, path: str, run_id: str, n_obs: int = 2) -> dict:
     env: dict = {}
