@@ -14,6 +14,19 @@ def _source(cell: dict) -> str:
     return "".join(value) if isinstance(value := cell.get("source", ""), list) else value
 def _cell(path: str, marker: str) -> str:
     return next(_source(cell) for cell in json.loads((ROOT / path).read_text(encoding="utf-8"))["cells"] if marker in _source(cell))
+def _params_code_02(path: str) -> str:
+    """P1-e 四组化适配：收集 02_merged 的全部 PARAMS code cell（组1-4）。"""
+    cells = json.loads((ROOT / path).read_text(encoding="utf-8"))["cells"]
+    group_markers = ["组1：数据与版本", "组2：科学参数", "组3：计算参数", "组4：输出与运行标识"]
+    parts = []
+    for cell in cells:
+        if cell["cell_type"] == "code":
+            src = _source(cell)
+            if any(marker in src for marker in group_markers):
+                parts.append(src)
+    if len(parts) != 4:
+        raise ValueError(f"Expected 4 PARAMS group code cells, found {len(parts)}")
+    return "\n".join(parts)
 class _Adata:
     def __init__(self, n_obs: int = 2) -> None:
         self.X = sp.csr_matrix(np.ones((n_obs, 2), dtype=np.float32))
@@ -45,7 +58,7 @@ def _base(tmp_path: Path) -> dict:
     return env
 def _env02(tmp_path: Path, n_obs: int = 2) -> dict:
     env = _base(tmp_path)
-    exec(_cell(NBS[0], "# === PARAMS ==="), env)
+    exec(_params_code_02(NBS[0]), env)  # P1-e 四组化：组1-4 全部 exec
     sources = ["Nancang_2025", "Kim_2023", "Nowicki_2023", "Yue_2024"]
     upstream_inputs = []
     for i, source in enumerate(sources):
@@ -86,7 +99,8 @@ def test_json_ast_params_and_prepare_run_is_deferred() -> None:
         code = [_source(cell) for cell in notebook["cells"] if cell["cell_type"] == "code"]
         ast.parse("\n".join(code), filename=path)
         if path != NBS[2]:
-            params = _cell(path, "# === PARAMS ===")
+            # P1-e 四组化：02_merged 的 PARAMS 已拆为组1-4
+            params = _params_code_02(path) if path == NBS[0] else _cell(path, "# === PARAMS ===")
             assert all(name in params for name in ("RUN_ID", "RUN_ROOT", "OUTPUT_FILENAME"))
             final = _cell(path, "# Checkpoint" if path == NBS[0] else "# === 参数记录 + Checkpoint ===")
             earlier = [source for source in code if source != final]

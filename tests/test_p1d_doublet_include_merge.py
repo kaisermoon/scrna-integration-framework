@@ -459,8 +459,8 @@ class TestNotebookStructure:
         assert "flagged_samples" in src, "missing flagged_samples"
 
     def test_params_cell_has_doublet_params(self, cells: list[dict[str, Any]]) -> None:
-        """PARAMS cell (id=9a522bbb) 含 6 个 doublet 参数。"""
-        src = _cell_source(cells, "9a522bbb")
+        """科学参数 cell (id=p1e-g2-sci-code) 含 6 个 doublet 参数（P1-e 四组化后 ID 迁移）。"""
+        src = _cell_source(cells, "p1e-g2-sci-code")
         required = [
             "DOUBLET_INCLUDE_KEY",
             "DOUBLET_STATE_KEY",
