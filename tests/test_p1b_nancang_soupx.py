@@ -46,6 +46,31 @@ def _combined() -> str:
     return "\n".join(parts)
 
 
+def _params_combined() -> str:
+    """返回全部 PARAMS 参数定义的拼接源码（兼容新旧 PARAMS 结构）。
+
+    P1-e 将原单 cell PARAMS 拆为四组（每组 1 md header + 1 code cell），
+    此函数收集所有四组 code cell 源码并拼接返回。
+    """
+    nb = _nb()
+    group_markers = [
+        "### 1. 数据源", "### 2. QC 阈值",
+        "### 3. 方法开关", "### 4. 输出版本与运行标识",
+    ]
+    sources = []
+    for i, cell in enumerate(nb["cells"]):
+        src = "".join(cell["source"]) if isinstance(cell["source"], list) else cell["source"]
+        if any(m in src for m in group_markers) and cell["cell_type"] == "markdown":
+            # 下一个 cell 是对应的 code cell
+            if i + 1 < len(nb["cells"]) and nb["cells"][i + 1]["cell_type"] == "code":
+                next_src = "".join(nb["cells"][i + 1]["source"]) if isinstance(nb["cells"][i + 1]["source"], list) else nb["cells"][i + 1]["source"]
+                sources.append(next_src)
+    if sources:
+        return "\n".join(sources)
+    # fallback: 旧结构单 # === PARAMS === cell
+    return _source("# === PARAMS ===")
+
+
 def _cell_indices(nb: dict, marker: str, cell_type: str = "code") -> list[int]:
     """返回所有含 marker 的 cell 在 cells 数组中的 index。"""
     indices = []
@@ -345,7 +370,7 @@ class TestParams:
 
     def test_doublet_three_state_params(self):
         """PARAMS 含六个三态参数。"""
-        src = _source("=== PARAMS ===")
+        src = _params_combined()
         for key in [
             "DOUBLET_SCORE_HIGH",
             "DOUBLET_SCORE_LOW",
@@ -358,12 +383,12 @@ class TestParams:
 
     def test_soupx_integer_round_param(self):
         """PARAMS 含 SOUPX_INTEGER_ROUND。"""
-        src = _source("=== PARAMS ===")
+        src = _params_combined()
         assert "SOUPX_INTEGER_ROUND" in src
 
     def test_old_params_preserved(self):
         """旧参数仍保留（向后兼容）。"""
-        src = _source("=== PARAMS ===")
+        src = _params_combined()
         for key in ["EXPECTED_DOUBLET_RATE", "DOUBLET_SCORE_THRESHOLD", "SOUPX_ENABLED"]:
             assert key in src, f"旧参数 {key} 丢失"
 
@@ -389,9 +414,9 @@ class TestSharedTestCompatibility:
     """确保不破坏 test_pr1b1_stage01_02_input.py 的参数化测试。"""
 
     def test_params_cell_parseable(self):
-        """PARAMS cell 可独立 exec。"""
+        """PARAMS cell 可独立 exec（兼容新旧结构）。"""
         import ast
-        src = _source("=== PARAMS ===")
+        src = _params_combined()
         ast.parse(src)
 
     def test_checkpoint_cell_parseable(self):

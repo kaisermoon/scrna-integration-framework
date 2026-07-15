@@ -33,6 +33,32 @@ def _cell(path: str, marker: str) -> str:
             return source
     raise AssertionError(f"{path} 缺少 cell: {marker}")
 
+
+def _params_source(path: str) -> str:
+    """返回 notebook 中全部 PARAMS 参数定义的拼接源码（兼容新旧 PARAMS 结构）。
+
+    P1-e 将 01_nancang 的单 cell PARAMS 拆为四组（每组 1 md header + 1 code cell）；
+    其他 notebook 仍使用旧结构（单 # === PARAMS === cell）。此函数自动适配两种结构。
+    """
+    nb = _nb(path)
+    group_markers = [
+        "### 1. 数据源", "### 2. QC 阈值",
+        "### 3. 方法开关", "### 4. 输出版本与运行标识",
+    ]
+    found_group = False
+    sources = []
+    for i, cell in enumerate(nb["cells"]):
+        src = _source(cell)
+        if any(m in src for m in group_markers) and cell.get("cell_type") == "markdown":
+            found_group = True
+            # 下一个 cell 是对应的 code cell
+            if i + 1 < len(nb["cells"]) and nb["cells"][i + 1].get("cell_type") == "code":
+                sources.append(_source(nb["cells"][i + 1]))
+    if found_group and sources:
+        return "\n".join(sources)
+    # fallback: 旧结构单 # === PARAMS === cell
+    return _cell(path, "# === PARAMS ===")
+
 class _Adata:
     def __init__(self, source: str, n_obs: int = 2, layers: dict | None = None) -> None:
         self.X = sp.csr_matrix(np.ones((n_obs, 2), dtype=np.float32))
@@ -51,7 +77,7 @@ class _Adata:
 
 def _env01(tmp: Path, path: str, run_id: str, n_obs: int = 2) -> dict:
     env: dict = {}
-    exec(_cell(path, "# === PARAMS ==="), env)
+    exec(_params_source(path), env)
     source = SOURCES[Path(path).name]
     manifest = tmp / f"{source}.yaml"
     manifest.write_text(f"source_dataset: {source}\npreprocessing_done: []\n", encoding="utf-8")
@@ -127,7 +153,7 @@ def test_json_ast_params_and_prepare_run_placement() -> None:
         code = [_source(c) for c in _nb(path)["cells"] if c["cell_type"] == "code"]
         ast.parse("\n".join(code), filename=path)
     for path in NB01:
-        assert all(name in _cell(path, "# === PARAMS ===") for name in ("RUN_ID", "RUN_ROOT", "OUTPUT_FILENAME"))
+        assert all(name in _params_source(path) for name in ("RUN_ID", "RUN_ROOT", "OUTPUT_FILENAME"))
         final = _cell(path, "# Checkpoint")
         assert "snapshot_effective_parameters(globals()" in final and "collect_runtime_provenance" in final
         earlier = [_source(c) for c in _nb(path)["cells"] if c["cell_type"] == "code" and _source(c) != final]
