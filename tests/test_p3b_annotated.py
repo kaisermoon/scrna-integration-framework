@@ -167,20 +167,47 @@ class TestFourProvenanceFieldsPresent:
 class TestClusterNIsPlaceholderNotFinal:
     """6d: Cluster_N placeholder only in pi_confirmed/unresolved context, never as final."""
 
-    def test_cluster_n_never_in_final_assignment(self):
-        joined = _all_code()
-        tree = ast.parse(joined)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Assign):
-                for target in node.targets:
-                    target_str = ast.unparse(target) if hasattr(ast, "unparse") else ast.dump(target)
-                    if "cell_type_final_" in target_str:
-                        value_str = ast.unparse(node.value) if hasattr(ast, "unparse") else ast.dump(node.value)
-                        # Allow only defensive fallback that is unreachable in normal flow
-                        if "Cluster_" in value_str:
-                            assert "# 不应到达这里" in joined or "防御" in joined, (
-                                f"Cluster_N used as cell_type_final value without defensive comment: {value_str[:120]}"
-                            )
+    def test_cluster_n_never_in_final_assignment(self, tmp_path):
+        """6d 红线（行为级）：Cluster_N 占位符绝不能进入 final cell type 列。
+
+        AST 搜索字面量 `cell_type_final_` 在此处不可靠——gate cell 实际用变量
+        `_final_col`（`adata.obs[_final_col] = ...`）赋值，AST 展开后目标从不含
+        该字面量，导致校验恒过（空跑）。改为行为级 exec：真正运行 decision + gate
+        cell，断言未确认簇不会把 Cluster_N 占位写进 final 列。
+
+        场景一（某簇 unresolved）：final 列根本不应被创建。
+        场景二（全簇 resolved + PI 确认）：final 列存在，且取值里没有任何
+        以 `Cluster_` 前缀的占位标签泄漏。
+        """
+        # 场景一：2 簇但只确认 1 簇（簇 1 未确认 → decision_source='unresolved'）
+        env, adata = _build_gate_env(tmp_path, pi_confirmed=True,
+                                     decisions={"0": "T_cell"})
+        _exec_cell("=== PI 决策输入", env)
+        _exec_cell("PI-final 闸门", env)
+        final_col = f"cell_type_final_{env['ANNOTATION_OUTPUT_VERSION']}"
+        assert env["final_gate_passed"] is False, (
+            "存在未确认簇时 final_gate_passed 必须为 False"
+        )
+        assert final_col not in adata.obs.columns, (
+            f"未确认簇存在时 {final_col} 不应被创建（Cluster_N 占位不得落 final）"
+        )
+
+        # 场景二：全簇确认 + PI_CONFIRMED=True → final 列生成且无 Cluster_ 占位泄漏
+        env2, adata2 = _build_gate_env(tmp_path, pi_confirmed=True,
+                                       decisions={"0": "T_cell", "1": "B_cell"})
+        _exec_cell("=== PI 决策输入", env2)
+        _exec_cell("PI-final 闸门", env2)
+        assert env2["final_gate_passed"] is True, (
+            "全簇确认 + PI_CONFIRMED=True 应通过闸门"
+        )
+        assert final_col in adata2.obs.columns, (
+            f"闸门通过后 {final_col} 应存在: columns={list(adata2.obs.columns)}"
+        )
+        final_values = [str(v) for v in adata2.obs[final_col].unique()]
+        leaked = [v for v in final_values if v.startswith("Cluster_")]
+        assert not leaked, (
+            f"Cluster_N 占位符泄漏进 final 列: {leaked}（final 取值={final_values}）"
+        )
 
     def test_cluster_n_appears_in_placeholder_context(self):
         joined = _all_code()
