@@ -67,11 +67,42 @@ def _load_nb() -> dict:
         return json.load(f)
 
 
+# P1-e 改动前的稳定 commit SHA（含原始 03-params cell 的 03_normalized.ipynb），
+# 用于受保护 cell 源码对比与参数值不变性验证。
+_ORIG_NB_COMMIT = "7206721"
+
+# 从原始 03-params cell 逐字提取的期望参数右值（用于验证四组化后值未变）
+_EXPECTED_PARAM_VALUES: dict[str, str] = {
+    "UPSTREAM_RUN_ROOT": '"results/runs"',
+    "UPSTREAM_RUN_ID": '"02-merged-v1-run001"',
+    "NORMALIZATION_METHOD": '"standard"',
+    "TARGET_SUM": "1e4",
+    "N_TOP_GENES": "3000",
+    "HVG_FLAVOR": '"seurat"',
+    "BATCH_AWARE_HVG": "True",
+    "HVG_BATCH_KEY": '"source_dataset"',
+    "EXCLUDE_MT_FROM_HVG": "True",
+    "EXCLUDE_RIBO_FROM_HVG": "True",
+    "EXCLUDE_HB_FROM_HVG": "True",
+    "CUSTOM_EXCLUDE_PATTERNS": "[]",
+    "HVG_SUBSAMPLE_PER_BATCH": "None",
+    "EXCLUDE_CELL_CYCLE_FROM_HVG": "False",
+    "FORCED_INCLUDE_GENES": "[]",
+    "REGRESS_OUT": "[]",
+    "SCALE": "False",
+    "MAX_SCALE_VALUE": "10",
+    "RUN_ID": '"03-normalized-v1-run001"',
+    "RUN_ROOT": '"results/runs"',
+    "OUTPUT_FILENAME": '"03_normalized_v1.h5ad"',
+    "OUTPUT_VERSION": "1",
+    "RANDOM_SEED": "42",
+}
+
+
 def _load_orig_nb() -> dict:
-    """从 git 加载 main 的原始 notebook JSON。"""
-    # 从当前 commit 的父提交获取原始 notebook（本 leaf 只改 03）
+    """从 P1-e 改动前的稳定 commit 加载原始 notebook JSON。"""
     result = subprocess.run(
-        ["git", "show", f"HEAD~1:notebooks/03_normalized.ipynb"],
+        ["git", "show", f"{_ORIG_NB_COMMIT}:notebooks/03_normalized.ipynb"],
         capture_output=True, text=True, check=True,
         cwd=str(_NB_PATH.parent.parent),
     )
@@ -298,40 +329,18 @@ class TestParamsValuePreservation:
     """PARAMS 四组化后所有变量右值与原始 03-params 逐字一致。"""
 
     def test_all_param_values_identical(self) -> None:
-        """每个变量在新四组 cell 中的值与原 03-params cell 完全一致。"""
-        orig_nb = _load_orig_nb()
+        """每个变量在新四组 cell 中的值与原 03-params cell 完全一致。
+        期望值从 _EXPECTED_PARAM_VALUES 常量读取（从原始 03-params 逐字提取）。"""
         new_nb = _load_nb()
-
-        # 从原 03-params cell 提取值
-        orig_src = ""
-        for cell in orig_nb["cells"]:
-            if cell.get("id") == "03-params":
-                orig_src = "".join(cell["source"]) if isinstance(cell["source"], list) else cell["source"]
-                break
-        assert orig_src, "原始 notebook 中未找到 id=03-params"
-
-        orig_values: dict[str, str] = {}
-        for line in orig_src.split("\n"):
-            line_stripped = line.strip()
-            if line_stripped.startswith("#") or not line_stripped:
-                continue
-            m = re.match(r"^(\w+)\s*=\s*(.+)$", line_stripped)
-            if m:
-                name = m.group(1)
-                val = m.group(2).strip()
-                val = re.sub(r"#.*$", "", val).rstrip()
-                orig_values[name] = val
-
-        # 从新四组 cell 提取值
         new_values = _extract_param_values(new_nb)
 
         mismatches = []
         for name in sorted(_ALL_PARAM_NAMES):
-            orig_val = orig_values.get(name)
+            expected_val = _EXPECTED_PARAM_VALUES.get(name)
             new_val = new_values.get(name)
-            if orig_val != new_val:
+            if expected_val != new_val:
                 mismatches.append(
-                    f"  {name}: orig={orig_val!r} new={new_val!r}"
+                    f"  {name}: expected={expected_val!r} actual={new_val!r}"
                 )
 
         # 无缺失
