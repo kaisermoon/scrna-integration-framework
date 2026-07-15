@@ -27,6 +27,15 @@ def _params_code_02(path: str) -> str:
     if len(parts) != 4:
         raise ValueError(f"Expected 4 PARAMS group code cells, found {len(parts)}")
     return "\n".join(parts)
+def _cells_all(path: str, marker: str) -> str:
+    """P1-e 向后兼容：当参数被拆分到多个 cell 时，拼接所有匹配 cell 的源码。
+    用于替代 _cell 的 PARAMS 搜索，使 exec 与断言能跨多 cell 生效。
+    """
+    nb = json.loads((ROOT / path).read_text(encoding="utf-8"))
+    sources = [_source(cell) for cell in nb["cells"] if marker in _source(cell)]
+    if not sources:
+        raise StopIteration
+    return "\n".join(sources)
 class _Adata:
     def __init__(self, n_obs: int = 2) -> None:
         self.X = sp.csr_matrix(np.ones((n_obs, 2), dtype=np.float32))
@@ -86,7 +95,7 @@ def _env03(tmp_path: Path, stage: str = "02_merged") -> dict:
         "processing_history": [], "stage": "02",
     }
     env = _base(tmp_path)
-    exec(_cell(NBS[1], "# === PARAMS ==="), env)
+    exec(_cells_all(NBS[1], "# === PARAMS ==="), env)
     env.update(UPSTREAM_RUN_ROOT=str(root), UPSTREAM_RUN_ID="stage02", RUN_ID="stage03",
                RUN_ROOT=str(tmp_path / "runs"), OUTPUT_FILENAME="03.h5ad",
                sc=SimpleNamespace(read_h5ad=lambda path: adata if Path(path) == checkpoint else None),
@@ -99,8 +108,13 @@ def test_json_ast_params_and_prepare_run_is_deferred() -> None:
         code = [_source(cell) for cell in notebook["cells"] if cell["cell_type"] == "code"]
         ast.parse("\n".join(code), filename=path)
         if path != NBS[2]:
-            # P1-e 四组化：02_merged 的 PARAMS 已拆为组1-4
-            params = _params_code_02(path) if path == NBS[0] else _cell(path, "# === PARAMS ===")
+            # P1-e：02_merged(NBS[0]) 四组化用 _params_code_02；03(NBS[1]) 四组化用 _cells_all；其余单 cell
+            if path == NBS[0]:
+                params = _params_code_02(path)
+            elif path == NBS[1]:
+                params = _cells_all(path, "# === PARAMS ===")
+            else:
+                params = _cell(path, "# === PARAMS ===")
             assert all(name in params for name in ("RUN_ID", "RUN_ROOT", "OUTPUT_FILENAME"))
             final = _cell(path, "# Checkpoint" if path == NBS[0] else "# === 参数记录 + Checkpoint ===")
             earlier = [source for source in code if source != final]
