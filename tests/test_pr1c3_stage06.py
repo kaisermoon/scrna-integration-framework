@@ -125,7 +125,7 @@ def test_structure_preserves_annotation_workflow_and_defers_pr6() -> None:
     final = _cell("# === Stage 06 draft checkpoint")
     assert all(name in params for name in ("UPSTREAM_RUN_ROOT", "UPSTREAM_RUN_ID", "RUN_ROOT", "RUN_ID", "OUTPUT_FILENAME"))
     assert "UPSTREAM_PATH" not in params and "OUTPUT_PATH" not in joined
-    assert "promote_run" not in final and "PI_CONFIRMED" not in joined
+    assert "promote_run" not in final and "PI_CONFIRMED" in joined
     assert "publish_compatibility_symlink" not in joined
     assert "if not all(input_hard_postconditions.values())" in setup
     assert not any(
@@ -176,7 +176,7 @@ def test_valid_stage06_is_auditable_unpromoted_draft(tmp_path: Path) -> None:
     manifest_path = tmp_path / "runs/stage06/draft/manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["stage_status"] == "NEEDS_REVIEW" and manifest["cluster_key"] == "leiden_res_0.6"
-    assert {"LEIDEN_COL", "OUTPUT_VERSION", "RUN_ID", "OUTPUT_FILENAME"} <= manifest["effective_parameters"].keys()
+    assert {"LEIDEN_COL", "ANNOTATION_OUTPUT_VERSION", "RUN_ID", "OUTPUT_FILENAME"} <= manifest["effective_parameters"].keys()
     assert "UPSTREAM_CHECKPOINT" not in manifest["effective_parameters"]
     assert all(manifest["inputs"][0][key] for key in ("manifest_sha256", "checkpoint_sha256"))
     assert rc.validate_checkpoint(manifest_path).is_file()
