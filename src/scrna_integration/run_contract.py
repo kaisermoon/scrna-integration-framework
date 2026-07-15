@@ -1116,3 +1116,379 @@ def promote_run(paths: RunPaths, *, warning_acceptance: Mapping[str, str] | None
             ) from original_error
         raise
     return promoted_checkpoint
+
+
+# ---- UX-3 run 管理只读枚举/分类管道（决策 UX-3 + RUN_ID 反复调参）----------------
+# 纯读取：枚举 manifest / 分类保留意图 / 跨 run 参数 diff / 清理候选枚举。
+# 绝不自动删除、绝不自动提升——只返回信息，动作决策留 notebook wave2 可见可调。
+# 内存纪律：只读 json + os.stat，绝不载入 h5ad 矩阵。
+
+PINNED_MARKER_NAME = "pinned.marker"
+"""run_dir 下存在此常规文件则视为研究者已 pin，wave2 notebook 负责建/删，本模块只读存在性。
+
+pin 不进 manifest.json——validate_manifest 会拒绝未知 top-level 键，若 pinned 写入
+manifest 则 promote_run 将因其未知键报错。故用 sidecar marker 承载 pin 意图。
+"""
+
+LARGE_MATRIX_SUFFIXES = (".h5ad",)
+"""清理候选默认匹配的大型矩阵后缀，enumerate_cleanup_candidates 用此过滤。"""
+
+
+class RunCategory(str, Enum):
+    """run 的保留意图四态，面向大型 h5ad 存储管理而非 stage_status 的复述。
+
+    promoted/pinned = 研究者意图保留（不进入清理候选清单）；
+    superseded/failed = 研究者可评审后清理（进入清理候选清单）。
+    细粒度的 stage_status（如 NEEDS_REVIEW draft 落入 superseded 桶）仍保留在
+    RunManifestRecord.stage_status 中，供 wave2 notebook 据此避免误清理活跃 run。
+    """
+
+    PROMOTED = "promoted"
+    PINNED = "pinned"
+    SUPERSEDED = "superseded"
+    FAILED = "failed"
+
+
+def classify_run(stage_status: str, *, promoted: bool, pinned: bool) -> RunCategory:
+    """将 manifest 的 stage_status 与 promoted/pinned 标记映射为保留意图四态。
+
+    分类优先级（高到低）：
+    1. stage_status == FAILED → FAILED（失败 run 无 checkpoint，诊断另存，最高优先）
+    2. promoted → PROMOTED（已原子提升的正式产物，永久保留）
+    3. pinned → PINNED（研究者显式保留的候选，由 wave2 notebook 建 pinned.marker）
+    4. 其余（含 NEEDS_REVIEW、SUCCESS_WITH_WARNINGS 等未提升未 pin 的 draft）
+       → SUPERSEDED（进清理评审候选清单）
+
+    参数：
+        stage_status: manifest["stage_status"] 的字符串值，必须是 StageStatus 合法值。
+        promoted: 该 run 的 draft 目录已被 os.replace 重命名为 promoted（promote_run 原子提升）。
+        pinned: run_dir 下存在常规文件 pinned.marker（由 enumerate_run_manifests 检测）。
+    """
+    try:
+        status = StageStatus(stage_status)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"invalid stage_status: {stage_status!r}; must be one of "
+            f"{[s.value for s in StageStatus]}"
+        ) from error
+    if status is StageStatus.FAILED:
+        return RunCategory.FAILED
+    if promoted:
+        return RunCategory.PROMOTED
+    if pinned:
+        return RunCategory.PINNED
+    return RunCategory.SUPERSEDED
+
+
+@dataclass(frozen=True)
+class RunManifestRecord:
+    """单个 run 的 manifest 只读摘要，由 enumerate_run_manifests 产出。
+
+    字段均在枚举时从 manifest.json + os.stat 提取，不载入 h5ad 矩阵。
+    output_* 字段对 FAILED run 全为 None（FAILED manifest 禁止声明 checkpoint）。
+    """
+
+    run_id: str
+    state: str  # "draft" 或 "promoted"
+    stage: str | None
+    stage_status: str | None
+    category: RunCategory | None  # None 表示 stage_status 非法，无法归类
+    pinned: bool
+    effective_parameters: dict[str, Any]
+    manifest_path: Path
+    state_dir: Path
+    output_path: Path | None
+    output_size_bytes: int | None
+    output_mtime: float | None
+    error: str | None
+
+
+def enumerate_run_manifests(root: str | Path) -> list[RunManifestRecord]:
+    """枚举 RUN_ROOT 下所有符合命名约定的 run，返回只读摘要列表。
+
+    识别 run：目录名匹配 _RUN_ID_RE（字母/数字/点/下划线/连字符），不含 symlink。
+    定 state：promoted/manifest.json 存在且为常规文件 → "promoted"；
+             draft/manifest.json 存在且为常规文件 → "draft"；
+             二者皆无 → 跳过（非 run 目录）。
+    pinned：run_dir 下存在常规文件 pinned.marker（非 symlink）。
+
+    manifest 读取使用现有的 _load_manifest（原始 json 读取，不做 schema 校验），
+    解析失败不抛异常：record.error 记录错误信息，其余字段尽量填默认值，
+    确保管理表不因单个损坏 run 而整体崩溃。
+
+    output_path：非 FAILED run 从 manifest["checkpoint"]["path"] 解析，
+    相对 state_dir 解析为绝对路径，确认路径在 state_dir 内后才 os.stat。
+    文件存在 → 记录 st_size 和 st_mtime；文件缺失 → 保留 path 但 size/mtime 为 None。
+    FAILED run → output_* 三者全 None。
+
+    mtime 语义说明：UI 场景关注"最后访问时间"，但 atime 在 relatime/noatime
+    挂载下不可靠，故以 st_mtime（最后修改时间）作为稳定代理。
+
+    全程只读 json + os.stat，绝不 import anndata、绝不载入 h5ad 内容。
+    """
+    root_path = Path(root).resolve()
+    records: list[RunManifestRecord] = []
+
+    if not root_path.is_dir():
+        return records
+
+    try:
+        entries = list(os.scandir(root_path))
+    except OSError:
+        return records
+
+    for entry in entries:
+        # 只处理真实的非 symlink 目录，且名称匹配 run_id 命名规则
+        if not entry.is_dir(follow_symlinks=False):
+            continue
+        if entry.is_symlink():
+            continue
+        if _RUN_ID_RE.fullmatch(entry.name) is None:
+            continue
+
+        run_dir = Path(entry.path).resolve()
+        run_id = entry.name
+
+        # 确定 state：promoted 优先于 draft
+        promoted_manifest = run_dir / "promoted" / "manifest.json"
+        draft_manifest = run_dir / "draft" / "manifest.json"
+        if promoted_manifest.is_file() and not promoted_manifest.is_symlink():
+            state = "promoted"
+            manifest_path = promoted_manifest
+            state_dir = run_dir / "promoted"
+        elif draft_manifest.is_file() and not draft_manifest.is_symlink():
+            state = "draft"
+            manifest_path = draft_manifest
+            state_dir = run_dir / "draft"
+        else:
+            # 不是 run 目录（无 manifest）
+            continue
+
+        # pinned：检查 run 级 sidecar marker
+        pinned = (run_dir / PINNED_MARKER_NAME).is_file() and not (run_dir / PINNED_MARKER_NAME).is_symlink()
+
+        # 读取 manifest（原始读，不校验 schema）
+        manifest: dict[str, Any] | None = None
+        error: str | None = None
+        try:
+            manifest = _load_manifest(manifest_path)
+        except (json.JSONDecodeError, ValueError) as exc:
+            error = f"manifest parse error: {exc}"
+
+        # 从 manifest 提取字段
+        stage: str | None = None
+        stage_status: str | None = None
+        effective_parameters: dict[str, Any] = {}
+        output_path: Path | None = None
+        output_size_bytes: int | None = None
+        output_mtime: float | None = None
+
+        if manifest is not None and isinstance(manifest, dict):
+            stage = manifest.get("stage")
+            if not isinstance(stage, str):
+                stage = None
+            stage_status = manifest.get("stage_status")
+            if not isinstance(stage_status, str):
+                stage_status = None
+            ep = manifest.get("effective_parameters")
+            if isinstance(ep, dict):
+                effective_parameters = dict(ep)
+
+            # 非 FAILED：从 checkpoint 解析输出路径
+            if stage_status != StageStatus.FAILED.value:
+                checkpoint = manifest.get("checkpoint")
+                if isinstance(checkpoint, dict):
+                    cp_path = checkpoint.get("path")
+                    if isinstance(cp_path, str) and cp_path:
+                        # 相对 state_dir 解析，确认不逃逸
+                        candidate = (state_dir / cp_path).resolve()
+                        if candidate.is_relative_to(state_dir):
+                            output_path = candidate
+                            try:
+                                file_stat = os.stat(candidate, follow_symlinks=False)
+                                if stat.S_ISREG(file_stat.st_mode) and not Path(candidate).is_symlink():
+                                    output_size_bytes = file_stat.st_size
+                                    output_mtime = file_stat.st_mtime
+                            except OSError:
+                                # 文件缺失或不可访问，保留 output_path 但 size/mtime 为 None
+                                pass
+
+        # 分类保留意图
+        category: RunCategory | None = None
+        try:
+            if stage_status is not None:
+                category = classify_run(
+                    stage_status,
+                    promoted=(state == "promoted"),
+                    pinned=pinned,
+                )
+        except ValueError as exc:
+            if error is None:
+                error = str(exc)
+
+        records.append(RunManifestRecord(
+            run_id=run_id,
+            state=state,
+            stage=stage,
+            stage_status=stage_status,
+            category=category,
+            pinned=pinned,
+            effective_parameters=effective_parameters,
+            manifest_path=manifest_path,
+            state_dir=state_dir,
+            output_path=output_path,
+            output_size_bytes=output_size_bytes,
+            output_mtime=output_mtime,
+            error=error,
+        ))
+
+    return records
+
+
+def diff_effective_parameters(
+    run_parameters: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """比较多个 run 的 effective_parameters，返回结构化差异供 notebook 渲染表格。
+
+    对输入的每个 run_id → effective_parameters_dict，逐参数 key 比较：
+    - present 标志区分"参数存在"与"参数缺失"（用 bool 而非哨兵字符串，
+      避免与真实参数值冲突）。
+    - 值比较：用 json.dumps(value, sort_keys=True, ensure_ascii=False) 做
+      规范化的深比较，支持嵌套 dict。若 json.dumps 抛错则退化为 repr 比较。
+    - differs：该 key 在任意两个 run 间取值不同 → 标记为差异。
+
+    返回结构：
+    {
+      "run_ids": [...],           # 按输入顺序列出 run_id
+      "parameters": {key: {"differs": bool, "values": {run_id: {...}}}},  # 每参数详情
+      "differing_keys": [...],    # 存在差异的参数 key，按字母序排列
+      "shared_keys": [...],       # 所有 run 都存在且值相同的 key，按字母序排列
+    }
+
+    空输入返回空结构，单 run 输入无差异（shared_keys 为该 run 的全部 key，
+    differing_keys 为空）。本函数只做结构化 diff，不做"哪个参数更优"的科研判断。
+    """
+    run_ids = list(run_parameters.keys())
+    if not run_ids:
+        return {"run_ids": [], "parameters": {}, "differing_keys": [], "shared_keys": []}
+
+    # 收集所有参数 key
+    all_keys: set[str] = set()
+    for params in run_parameters.values():
+        all_keys.update(params.keys())
+
+    parameters: dict[str, Any] = {}
+    differing_keys: list[str] = []
+    shared_keys: list[str] = []
+
+    for key in sorted(all_keys):
+        values: dict[str, dict[str, Any]] = {}
+        collected: list[tuple[bool, str]] = []  # (present, canonical)
+
+        for run_id in run_ids:
+            params = run_parameters.get(run_id, {})
+            if key in params:
+                entry: dict[str, Any] = {"present": True, "value": params[key]}
+                try:
+                    canonical = json.dumps(params[key], sort_keys=True, ensure_ascii=False)
+                except (TypeError, ValueError):
+                    canonical = repr(params[key])
+                collected.append((True, canonical))
+            else:
+                entry = {"present": False}
+                collected.append((False, "<absent>"))
+            values[run_id] = entry
+
+        differs = len(set(collected)) > 1
+        parameters[key] = {"differs": differs, "values": values}
+
+        if differs:
+            differing_keys.append(key)
+        elif all(present for present, _ in collected):
+            shared_keys.append(key)
+
+    return {
+        "run_ids": run_ids,
+        "parameters": parameters,
+        "differing_keys": differing_keys,
+        "shared_keys": shared_keys,
+    }
+
+
+@dataclass(frozen=True)
+class CleanupCandidate:
+    """清理候选：superseded 或 failed run 内的大型矩阵文件路径及大小。
+
+    由 enumerate_cleanup_candidates 枚举产出，wave2 notebook 据此渲染清理勾选表。
+    本 dataclass 只记录元信息，不包含删除逻辑。
+    """
+
+    run_id: str
+    category: RunCategory
+    path: Path
+    size_bytes: int
+    state: str  # "draft" 或 "promoted"
+
+
+def enumerate_cleanup_candidates(
+    records: Sequence[RunManifestRecord],
+    *,
+    min_bytes: int = 0,
+    suffixes: Sequence[str] = LARGE_MATRIX_SUFFIXES,
+) -> list[CleanupCandidate]:
+    """枚举 superseded 和 failed run 中的大型矩阵文件，供清理评审使用。
+
+    仅处理 category ∈ {SUPERSEDED, FAILED} 的 record；promoted 和 pinned 的
+    run 一律排除（研究者意图保留）。
+
+    对每个候选 run，递归扫描其 state_dir（draft 或 promoted 子目录），
+    收集后缀命中 suffixes 且 st_size >= min_bytes 的常规文件（跳过 symlink）。
+    递归扫描覆盖 checkpoint h5ad 和失败 run 遗留在 draft 内的临时 h5ad
+    （FAILED manifest 不声明 checkpoint，但 draft 中可能已有中途写下的矩阵文件）。
+
+    返回按 (run_id, path) 排序的列表。
+
+    铁律：本函数只 os.stat 枚举，绝不删除、移动或重命名任何文件。
+    删除决策与执行留 notebook wave2——研究者勾选候选后，
+    notebook cell 自行 os.remove，本 helper 不代劳。
+    """
+    candidates: list[CleanupCandidate] = []
+    allowed_suffixes = set(suffixes)
+
+    allowed_categories = {RunCategory.SUPERSEDED, RunCategory.FAILED}
+
+    for record in records:
+        if record.category not in allowed_categories:
+            continue
+        if not record.state_dir.is_dir():
+            continue
+
+        for dirpath_str, _dirnames, filenames in os.walk(record.state_dir, followlinks=False):
+            dirpath = Path(dirpath_str)
+            if dirpath.is_symlink():
+                continue
+            for filename in filenames:
+                filepath = dirpath / filename
+                if filepath.is_symlink():
+                    continue
+                # 后缀过滤
+                if not any(filename.endswith(suffix) for suffix in allowed_suffixes):
+                    continue
+                try:
+                    file_stat = os.stat(filepath, follow_symlinks=False)
+                except OSError:
+                    continue
+                if not stat.S_ISREG(file_stat.st_mode):
+                    continue
+                if file_stat.st_size < min_bytes:
+                    continue
+                candidates.append(CleanupCandidate(
+                    run_id=record.run_id,
+                    category=record.category,
+                    path=filepath,
+                    size_bytes=file_stat.st_size,
+                    state=record.state,
+                ))
+
+    candidates.sort(key=lambda c: (c.run_id, str(c.path)))
+    return candidates
