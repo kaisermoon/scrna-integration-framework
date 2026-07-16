@@ -6,6 +6,21 @@ src/notebook 边界铁律（2026-07-10 PI 定稿）：进 src/ 的仅为技术�
 
 __version__ = "0.0.1"
 
+# per_dataset 输出契约（P0 地基）
+from scrna_integration.per_dataset_schema import DOUBLET_CLASS_COL as DOUBLET_CLASS_COL
+from scrna_integration.per_dataset_schema import DOUBLET_CONTRACT_KEY as DOUBLET_CONTRACT_KEY
+from scrna_integration.per_dataset_schema import DOUBLET_INCLUDE_COL as DOUBLET_INCLUDE_COL
+from scrna_integration.per_dataset_schema import DOUBLET_PREDICTED_COL as DOUBLET_PREDICTED_COL
+from scrna_integration.per_dataset_schema import DOUBLET_SCORE_COL as DOUBLET_SCORE_COL
+from scrna_integration.per_dataset_schema import (
+    EXPRESSION_CONTRACT_KEY as EXPRESSION_CONTRACT_KEY,
+)
+from scrna_integration.per_dataset_schema import LAYER_COUNTS as LAYER_COUNTS
+from scrna_integration.per_dataset_schema import LAYER_COUNTS_SOUPX as LAYER_COUNTS_SOUPX
+from scrna_integration.per_dataset_schema import (
+    validate_per_dataset_output as validate_per_dataset_output,
+)
+
 from scrna_integration.io import inject_genomic_positions as inject_genomic_positions
 from scrna_integration.io import sync_gene_ids as sync_gene_ids
 
