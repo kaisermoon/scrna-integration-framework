@@ -32,6 +32,8 @@ updated: "2026-06-10"
 | **PR diff 审查**（独立会话，与 coder 不同上下文）、verdict + issue 清单 + 回报契约 | **code-reviewer** | 每个 PR 合并前必经；产物是 src/notebook/CI/schema 的 diff 才归它 |
 | **非代码执行**：`gh pr merge` 收尾、CI 轮询、worktree 清理、远程分支删除、夹具生成/验证、`_plan.md`/`_memory.md` 批量状态维护、跨文件搜索整理、CLI 调用 | **operator** | PR 合并收尾（见 repo-loop）、跑 `make_test_subset.py` 生成夹具、状态记账 |
 
+> **⚠️ 委派纪律（每次调用 Agent 工具前必查）**：使用 Agent 工具时必须显式指定 `subagent_type` 参数（`"coder"` / `"code-reviewer"` / `"operator"` 等）。不填 `subagent_type` 会退化为通用 Agent，绕过角色约束——这是违规。通用 Agent 只在上表三类均不适用且有明确理由时才允许使用，且需在内部备注原因。
+
 **判定**：产物是代码/notebook → coder；产物是 diff 审查 verdict → code-reviewer；产物是被处理后的文件/git 状态/数据 → operator。
 
 ## 三、每个 PR 的标准循环（主 Agent 编排，不亲自执行）
