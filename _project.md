@@ -15,7 +15,7 @@ repo:
   default_branch: main
   protected_branches: [main]
   ci_required_checks: [test, lint]
-  pr_size_limit: {files: 10, lines: 400}
+  pr_size_limit: {files: 15, lines: 3000}  # 认知复杂度用「改动 cell 数 ≤ 30」控制；notebook JSON 膨胀不计入，详见 CLAUDE.md
   reviewer_profile: default
 ---
 
