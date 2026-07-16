@@ -228,37 +228,54 @@ def assert_no_tautology(test_file_path: str | Path, test_func_name: str) -> None
     tautologies_found = []
 
     for node in ast.walk(func_node):
-        # 模式 1：x is x（同一节点做 is 比较）
+        # 模式 1：x is x / x is not x（同一节点做 identity 比较）
+        # 模式 2：list(x) == list(x) 或 len(x) == len(x) 等包装调用
         if isinstance(node, ast.Compare):
-            left = node.left
-            for op, comparator in zip(node.ops, node.comparators, strict=True):
+            for i, (op, comparator) in enumerate(
+                zip(node.ops, node.comparators, strict=True)
+            ):
+                # P1 fix：第 i 轮的左操作数随链式比较推进
+                current_left = node.left if i == 0 else node.comparators[i - 1]
+
                 if isinstance(op, ast.Is):
-                    if ast.dump(left) == ast.dump(comparator):
+                    if ast.dump(current_left) == ast.dump(comparator):
                         tautologies_found.append(
-                            f"第 {node.lineno} 行：`x is x` 同语反复"
-                            f"（左右表达式相同：{ast.unparse(left)!r}）"
+                            f"第 {node.lineno} 行：`x is x` 恒真断言（tautology）"
+                            f"（左右表达式相同：{ast.unparse(current_left)!r}）"
+                        )
+
+                if isinstance(op, ast.IsNot):
+                    if ast.dump(current_left) == ast.dump(comparator):
+                        tautologies_found.append(
+                            f"第 {node.lineno} 行：`x is not x` 恒假断言（contradiction）"
+                            f"（左右表达式相同：{ast.unparse(current_left)!r}）"
                         )
 
                 # 模式 2：list(x) == list(x) 或 len(x) == len(x)
                 if isinstance(op, (ast.Eq, ast.NotEq)):
-                    left_dump = ast.dump(left)
+                    left_dump = ast.dump(current_left)
                     right_dump = ast.dump(comparator)
                     if left_dump == right_dump:
-                        # 是否是包装调用形式
-                        if isinstance(left, ast.Call):
-                            func_name = _get_call_func_name(left)
+                        # P2 fix：Eq → tautology，NotEq → contradiction
+                        if isinstance(op, ast.Eq):
+                            kind = "恒真断言（tautology）"
+                        else:
+                            kind = "恒假断言（contradiction）"
+
+                        if isinstance(current_left, ast.Call):
+                            func_name = _get_call_func_name(current_left)
                             if func_name in ("list", "len", "set", "tuple", "sorted"):
                                 tautologies_found.append(
                                     f"第 {node.lineno} 行："
-                                    f"`{func_name}(x) == {func_name}(x)` 同语反复"
+                                    f"`{func_name}(x) op {func_name}(x)` {kind}"
                                     f"（表达式：{ast.unparse(node)!r}）"
                                 )
                         else:
-                            # 纯同名变量比较 x == x
-                            if isinstance(left, ast.Name):
+                            # 纯同名变量比较 x == x / x != x
+                            if isinstance(current_left, ast.Name):
                                 tautologies_found.append(
                                     f"第 {node.lineno} 行："
-                                    f"`{left.id} == {left.id}` 同语反复"
+                                    f"`{current_left.id} op {current_left.id}` {kind}"
                                 )
 
     if tautologies_found:
