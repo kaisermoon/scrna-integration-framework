@@ -58,6 +58,7 @@ updated: "2026-06-10"
 ## 四、本项目特有铁律
 
 - **notebook PR 防超时**：coder **禁止**在单次 turn 内跑 nbconvert 端到端（scVI 训练 + LLM 调用必超时，2026-06-08 实测两次）。改为：静态构建 notebook（nbformat 增量）+ 清 output（`--clear-output`），**运行验证交 PI 在 jupyter 手动跑或 CI**。
+- **notebook PR 认知复杂度判据**：`_project.md` 的 `pr_size_limit.lines=3000` 是 JSON 行数上限（notebook 膨胀专用）。reviewer 以**改动 cell 数 ≤ 30**作为认知复杂度上限判据，超出须在 verdict 中标注并报告主 Agent 决定是否拆 PR；纯代码文件（`.py`/`.R`/`.sh`）仍以 600 行为参考上限。
 - **远程分支清理**：用 `gh api -X DELETE repos/{owner}/{repo}/git/refs/heads/{branch}`（走 HTTPS），比 `git push origin --delete`（SSH）抗网络抖动。`gh pr merge --delete-branch` 只删本地，远程需另删。
 - **数据零进 git**：原始数据在 `~/Works/GCPL_scRNA/`（只读），夹具在本地 `data/_subset/`（gitignore，~443M）。只有抽样脚本 + manifest 进 git。worktree 用软链复用主树 `data/_subset/`，加进 `.git/info/exclude`。
 - **conda 环境隔离**：所有装包在专用 `scrna-integration` / `scrna-integration-r`，绝不动 base。多 worktree 共享环境用 `PYTHONPATH=src pytest`，禁止 `pip install -e .`（editable 会互相覆盖）。
