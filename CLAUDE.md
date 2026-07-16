@@ -32,6 +32,8 @@ updated: "2026-06-10"
 | **PR diff 审查**（独立会话，与 coder 不同上下文）、verdict + issue 清单 + 回报契约 | **code-reviewer** | 每个 PR 合并前必经；产物是 src/notebook/CI/schema 的 diff 才归它 |
 | **非代码执行**：`gh pr merge` 收尾、CI 轮询、worktree 清理、远程分支删除、夹具生成/验证、`_plan.md`/`_memory.md` 批量状态维护、跨文件搜索整理、CLI 调用 | **operator** | PR 合并收尾（见 repo-loop）、跑 `make_test_subset.py` 生成夹具、状态记账 |
 
+> **⚠️ 委派纪律（每次调用 Agent 工具前必查）**：使用 Agent 工具时必须显式指定 `subagent_type` 参数（`"coder"` / `"code-reviewer"` / `"operator"` 等）。不填 `subagent_type` 会退化为通用 Agent，绕过角色约束——这是违规。通用 Agent 只在上表三类均不适用且有明确理由时才允许使用，且需在内部备注原因。
+
 **判定**：产物是代码/notebook → coder；产物是 diff 审查 verdict → code-reviewer；产物是被处理后的文件/git 状态/数据 → operator。
 
 ## 三、每个 PR 的标准循环（主 Agent 编排，不亲自执行）
@@ -58,6 +60,7 @@ updated: "2026-06-10"
 ## 四、本项目特有铁律
 
 - **notebook PR 防超时**：coder **禁止**在单次 turn 内跑 nbconvert 端到端（scVI 训练 + LLM 调用必超时，2026-06-08 实测两次）。改为：静态构建 notebook（nbformat 增量）+ 清 output（`--clear-output`），**运行验证交 PI 在 jupyter 手动跑或 CI**。
+- **notebook PR 认知复杂度判据**：`_project.md` 的 `pr_size_limit.lines=3000` 是 JSON 行数上限（notebook 膨胀专用）。reviewer 以**改动 cell 数 ≤ 30**作为认知复杂度上限判据，超出须在 verdict 中标注并报告主 Agent 决定是否拆 PR；纯代码文件（`.py`/`.R`/`.sh`）仍以 600 行为参考上限。
 - **远程分支清理**：用 `gh api -X DELETE repos/{owner}/{repo}/git/refs/heads/{branch}`（走 HTTPS），比 `git push origin --delete`（SSH）抗网络抖动。`gh pr merge --delete-branch` 只删本地，远程需另删。
 - **数据零进 git**：原始数据在 `~/Works/GCPL_scRNA/`（只读），夹具在本地 `data/_subset/`（gitignore，~443M）。只有抽样脚本 + manifest 进 git。worktree 用软链复用主树 `data/_subset/`，加进 `.git/info/exclude`。
 - **conda 环境隔离**：所有装包在专用 `scrna-integration` / `scrna-integration-r`，绝不动 base。多 worktree 共享环境用 `PYTHONPATH=src pytest`，禁止 `pip install -e .`（editable 会互相覆盖）。
