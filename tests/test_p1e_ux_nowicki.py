@@ -485,13 +485,13 @@ def test_counts_contract_9978541f_intact():
 
 
 def test_doublet_code_p1c_intact():
-    """doublet cell p1c_doublet_code 仍含 classify_doublets 与 doublet_detection。"""
+    """doublet cell p1c_doublet_code 仍含 classify_doublets 与 doublet_contract。"""
     nb = _load_nb()
     c = _cell_by_id(nb, "p1c_doublet_code")
     assert c is not None, "doublet code cell 丢失"
     src = _code_src(c)
     assert "classify_doublets" in src, "classify_doublets 函数遗失"
-    assert "doublet_detection" in src, "doublet_detection schema 遗失"
+    assert "doublet_contract" in src, "doublet_contract schema 遗失"
     # 三态边界语义
     assert '"singlet"' in src or "'singlet'" in src, "singlet 状态遗失"
     assert '"uncertain"' in src or "'uncertain'" in src, "uncertain 状态遗失"
