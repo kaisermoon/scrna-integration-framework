@@ -125,7 +125,7 @@ class TestParamsFourGroups:
             ("OUTPUT_VERSION", "OUTPUT_VERSION = 1"),
             ("RANDOM_SEED", "RANDOM_SEED = 42"),
             ("DOUBLET_INCLUDE_KEY", 'DOUBLET_INCLUDE_KEY = "doublet_include"'),
-            ("DOUBLET_STATE_KEY", 'DOUBLET_STATE_KEY = "doublet_prediction"'),
+            ("DOUBLET_STATE_KEY", 'DOUBLET_STATE_KEY = "doublet_class"'),
             ("SAMPLE_KEY", 'SAMPLE_KEY = "sample_id"'),
             ("MAX_DOUBLET_FRACTION", "MAX_DOUBLET_FRACTION = 0.30"),
             ("MAX_UNCERTAIN_FRACTION", "MAX_UNCERTAIN_FRACTION = 0.30"),
