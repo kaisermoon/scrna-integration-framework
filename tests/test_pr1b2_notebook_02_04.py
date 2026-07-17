@@ -100,6 +100,7 @@ def _env03(tmp_path: Path, stage: str = "02_merged") -> dict:
                RUN_ROOT=str(tmp_path / "runs"), OUTPUT_FILENAME="03.h5ad",
                sc=SimpleNamespace(read_h5ad=lambda path: adata if Path(path) == checkpoint else None),
                excluded_counts={}, _n_genes_values=[3000], _flavor_values=["seurat"],
+               N_PCS_FINAL=20,  # P1-1修复后 checkpoint 校验此值非 None；测试用合理值覆盖默认 None
                validate_expression_contract=rc.validate_expression_contract)
     return env
 def test_json_ast_params_and_prepare_run_is_deferred() -> None:
