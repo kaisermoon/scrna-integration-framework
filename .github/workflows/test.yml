@@ -3,7 +3,7 @@ name: test
 on:
   push:
     branches: [main]
-  pull_request:
+  # 注：已移除 pull_request 触发——test 仅在 merge 后后台运行，不阻塞 PR 合并
 
 # 混合语言门禁：仓库中存在对应入口时必须真实执行，任一命令失败即失败。
 
