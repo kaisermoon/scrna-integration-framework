@@ -2,8 +2,8 @@
 title: "项目记忆：scRNA-seq整合分析框架"
 type: project-memory
 project_id: "scrna-integration-framework"
-last_session: "2026-07-15"
-updated: "2026-07-15"
+last_session: "2026-07-17"
+updated: "2026-07-17"
 ---
 
 # 项目记忆：scRNA-seq整合分析框架
@@ -15,6 +15,121 @@ updated: "2026-07-15"
 ## 当前状态
 
 **phase = analysis**。2026-06-05 由 `/kickoff` 新建。代码工程完成、23-stage 管线打通，早已过 planning 阶段。
+
+## 💾 会话保存点（2026-07-17 第三次，05+06 双 notebook UX 审查修复全完成，main = `daeb65c`）
+
+**05_clustered + 06_annotated 双 notebook 专家审查与全面修复完成** ✅
+
+本次会话分三阶段：
+1. 确认 UX-3 和 B9 均已完成（2026-07-17 第一次保存点记录）
+2. 对 05_clustered 进行专家审查并全面修复（PR #194）
+3. 对 06_annotated 进行专家审查并全面修复（PR #195）
+
+### 05_clustered 修复（PR #194, main = `90c040a`）
+
+委派 Explore agent 从生物医学专家（非生信背景）和生物信息学资深专家双视角审查 `notebooks/05_clustered.ipynb`（57 cells），发现 10 项问题（1 个 P0 严重、6 个 P1 可用性、4 个 P2 技术增强）。委派 coder agent 一次性全部修复（commit 9dd0d34 → merge commit 90c040a）：
+
+**P0 严重问题（性能）**：
+- 消除双重 Leiden 计算：Cell 12 执行所有分辨率的 `sc.tl.leiden`，Cell 17 改为**复用** Cell 12 已算好的 leiden 列仅计算指标（silhouette/CH/ARI），不再重复聚类。增加 guard：若 Cell 12 的列缺失，Cell 17 抛 RuntimeError 提示先跑 Cell 12。
+
+**P1 可用性改进（生物学家友好）**：
+- PARAMS cell 加优先级分级：`=== 通常需要调整 ===` 和 `=== 高级参数（通常保持默认）===` 视觉分隔
+- 突出 `SELECTED_CLUSTER_KEY`：决策 Markdown（Cell 46）末尾增加 "⚠️ 回到 Cell 2 修改" 提示
+- Cell 52 `del adata` 标注为可选：前置 Markdown cell 说明"调试时可跳过避免重启 kernel"
+- 稳定性分析加使用指引：`STABILITY_ENABLED = False` 下方注释"何时应开启"
+- Cell 51 Stage Verdict 改为动态输出：死 Markdown 复选框改为代码 cell 基于运行时状态输出 ✅/⚠️
+
+**P2 技术增强（生信专家需求）**：
+- 扩展 `SELECTED_CLUSTER_KEY` 校验：不再 hardcode leiden 格式正则，兼容非 Leiden 方法（如 ACDC）
+- 创建下游字段别名：Cell 47 增加 `adata.obs["clusters"] = adata.obs[SELECTED_CLUSTER_KEY].copy()`
+- 补充 Calinski-Harabasz 指标：Cell 17 sweep 循环增加 CH score
+- Consensus Clustering 加内存警告：Cell 14 注释标注内存需求（n_cells=10k→400MB）
+
+**审查评分**：生物学友好度 4/5、调参工作流可用性 3→4/5、代码质量 3→4/5。修复后 57→58 cells，净变更 +66/-258 lines。
+
+### 06_annotated 修复（PR #195, main = `daeb65c`）
+
+委派 Explore agent 从双视角审查 `notebooks/06_annotated.ipynb`（42 cells），发现 6 项问题（1 个 P0 最高、1 个 P1 高优先、4 个 P2 中优先）。委派 coder agent 全部修复（commit 2b13ae8 → merge commit daeb65c）：
+
+**P0 最高优先（生产安全）**：
+- MARKER_CSV 测试夹具 guard：在 PARAMS cell 加 `warnings.warn` 检测 "TEST"/"test" 字样，防止误用测试数据进行正式分析
+- 补充 marker 文件格式文档：CSV 必须包含 `cell_type`/`gene`/`role` 三列，注释说明每列含义
+
+**P1 高优先（流程完整性）**：
+- 插入 pre-annotation cluster quality check cell：在 marker 注释前检查 cluster 大小分布（警告 <20 cells 的微簇）、Leiden 标签完整性、与上游 `selected_cluster_key` 的一致性
+
+**P2 中优先（可理解性与健壮性）**：
+- 补充转化状态检测的生物医学背景：解释什么是 transitional state、在胃黏膜研究中的重要性（SPEM→肠化→异型增生）、结果如何判断
+- 补充跨方法比较的通俗解释：各方法优缺点、Cohen's kappa 阈值解读（>0.8 高度一致 / 0.6-0.8 中度 / <0.6 分歧大）、Sankey 图阅读指南
+- PI 决策 CSV schema 校验：`_pi_from_csv` 读取后检查必要列（cluster/pi_confirmed）并转换 cluster 列为字符串
+- 新增 PI 决策指南 Markdown：三色评级（GREEN/YELLOW/RED）的含义与决策建议、YELLOW 簇的四步核查流程、unresolved 簇的三种处理路径
+- 新增下游兼容性契约 Markdown：`final_gate_passed=True/False` 时的不同行为、NB07 的 fallback 机制、如何处理未确认簇
+
+**审查评分**：生物学友好度 3→4/5、流程完整性 3→4/5、代码健壮性 3→4/5。修复后 42→45 cells，净变更 +24/-288 lines。
+
+### 总结
+
+两个 notebook 共修复 16 项问题（2 个 P0、7 个 P1、7 个 P2），全部通过本地 Review 并合并推送远程。修复聚焦两个核心维度：
+1. **生物医学专家友好度**：参数分级、生物学语境补充、决策指引、通俗化解释
+2. **生产安全与健壮性**：测试夹具 guard、pre-annotation QC、schema 校验、下游契约明确
+
+**下一步**：PI 闸门项（scANVI 真跑、SoupX 偏差量化、LLM 多模型共识、第一波生物学结果）。开发侧无遗留待办。
+
+## 💾 会话保存点（2026-07-17 第二次，05_clustered 专家审查修复完成，main = `90c040a`）
+
+**05_clustered UX 专家审查与全面修复完成** ✅
+
+委派 Explore agent 从生物医学专家（非生信背景）和生物信息学资深专家双视角审查 `notebooks/05_clustered.ipynb`（57 cells），发现 10 项问题（1 个 P0 严重、6 个 P1 可用性、4 个 P2 技术增强）。委派 coder agent 一次性全部修复（PR #194 本地合并，commit 9dd0d34 → merge commit 90c040a）：
+
+**P0 严重问题（性能）**：
+- 消除双重 Leiden 计算：Cell 12 执行所有分辨率的 `sc.tl.leiden`，Cell 17 改为**复用** Cell 12 已算好的 leiden 列仅计算指标（silhouette/CH/ARI），不再重复聚类。增加 guard：若 Cell 12 的列缺失，Cell 17 抛 RuntimeError 提示先跑 Cell 12。
+
+**P1 可用性改进（生物学家友好）**：
+- PARAMS cell 加优先级分级：`=== 通常需要调整 ===` 和 `=== 高级参数（通常保持默认）===` 视觉分隔，非生信研究者不再迷失在 34 行参数中
+- 突出 `SELECTED_CLUSTER_KEY`：决策 Markdown（Cell 46）末尾增加 "⚠️ 回到 Cell 2 修改 `SELECTED_CLUSTER_KEY`" 明确提示
+- Cell 52 `del adata` 标注为可选：前置 Markdown cell 说明"调试时可跳过此 cell 避免重启 kernel"
+- 稳定性分析加使用指引：`STABILITY_ENABLED = False` 下方注释"何时应开启：silhouette 分数平坦（<0.05 差异）、无法从常规指标判断时"
+- Cell 51 Stage Verdict 改为动态输出：死 Markdown 复选框改为代码 cell 基于运行时状态输出 ✅/⚠️
+
+**P2 技术增强（生信专家需求）**：
+- 扩展 `SELECTED_CLUSTER_KEY` 校验：不再 hardcode leiden 格式正则，先检查列是否存在，非 Leiden 方法（如 ACDC）标记为 `custom`
+- 创建下游字段别名：Cell 47 增加 `adata.obs["clusters"] = adata.obs[SELECTED_CLUSTER_KEY].copy()`，06 可用固定列名
+- 补充 Calinski-Harabasz 指标：Cell 17 sweep 循环增加 CH score（与 silhouette 互补的聚类质量视角）
+- Consensus Clustering 加内存警告：Cell 14 注释标注 "⚠️ n_cells=10k→400MB，50k→10GB，100k→40GB，建议 <20k cells"
+
+**审查评分**：生物学友好度 4/5、调参工作流可用性 3→4/5（P0 修复后）、代码质量/可维护性 3→4/5。修复后 notebook 从 57→58 cells（新增 1 个 Markdown cell），净变更 +66/-258 lines（消除冗余代码）。
+
+## 💾 会话保存点（2026-07-17 第一次，UX-3 & B9 完成确认，main = `26e3be6`）
+
+**UX-3（Run 管理体系）完成确认** ✅
+
+完整 run 管理基础设施已落地，覆盖 04/05/06 三个 notebook：
+- **Wave1**（PR #181, commit ddd5957）：04_embedded run management panel，包含 `selected_embedding` 决策 cell + UX-1 方法勾选（scVI 六项严格校验，PR #174）
+- **Wave2**（PRs #182/#183, commits 749b45e/38a4074）：05_clustered 与 06_annotated run management panels 全部实现
+- **基础设施**（PR #178, commit 5763260）：`src/scrna_integration/run_contract.py`（67KB）实现四态管理（PROMOTED/PINNED/SUPERSEDED/FAILED）+ 跨 run 参数比较 `diff_effective_parameters()` + 清理候选枚举 `enumerate_cleanup_candidates()`
+- **Bug 修复**（PR #185, commit c8fc7ef）：guard `c.category None` 在 cleanup candidates cell
+
+每个 notebook（04/05/06）的最后 5 个 cell 包含完整「🗂 UX-3 Run 管理与跨参数比较」section，三个核心管理面板：run 状态总览（只读 JSON 内存安全）、跨 run 参数比较展示差异、清理候选枚举（仅枚举不删除需人工确认）。
+
+**B9（Downstream 版本号收敛）完成确认** ✅
+
+07_downstream D01-D14 全部 14 个 notebooks 的约 70 处硬编码版本号已收敛到 PARAMS 单点变量（PR #179, commit fb660e4）：
+- 每个 notebook PARAMS cell 新增 `UPSTREAM_VERSION` / `OUTPUT_VERSION` 字符串常量
+- 替换所有 downstream path/uns 读写为 f-string 引用这些变量
+- 字段名合约（cell_type_final_v1, pseudotime_monocle3_v1, cytotrace_v1）保持不变
+- 默认值保持 "v1"，零语义变更，纯字面量到变量的收敛
+- 新增测试文件 `tests/test_b9_downstream_versions.py`（242 行）
+- grep 计数总计 105 处引用，覆盖全部 14 个 downstream notebooks
+
+**其他完成项**（2026-07-15 至 2026-07-17）：
+- PR #186（commit 0c94ffe）：`per_dataset_schema.py` contract 建立 + 所有 01_ notebooks 对齐
+- PR #189（commit 58dd8aa）：Kim/Nancang/Yue notebooks 强化 MAD 诊断
+- PR #188（commit e315252）：01_template_10x 全面改造到 Kim/Nancang 标准
+- PR #187（commit 18fdb7c）：P2 打磨（cell cycle 多行/Nowicki fallback 警告/Yue PARAMS 四组化）
+- PR #184-adjacent（commit fb660e4）：downstream 版本字面量收敛（B9）
+- PR #193（commit 26e3be6）：同步本地 commits + lightweight PR config
+
+**下一步**：UX-3 与 B9 已全部完成。PI 闸门项（需 PI 亲自操作）：scANVI 真跑、SoupX 校正偏差量化、LLM 多模型共识、第一波生物学结果。开发循环优化建议：merge queue + auto-merge、拆共享测试 per-notebook、CI 作唯一全量门。
 
 ## 💾 会话保存点（2026-07-15 第二次，P2+P3 生产整改主体全完成，main = `2175475`）
 
@@ -739,3 +854,73 @@ updated: "2026-07-15"
 - [ ] CODEOWNERS（如适用）
 - [ ] Required signed commits（推荐）
 - [ ] 设置 repo 描述与 topics（建议 topics: `single-cell`, `scrna-seq`, `bioinformatics`, `data-integration`, `scanpy`）
+
+## 💾 会话保存点（2026-07-17 第四次，01-06 notebook UX 全面审查与三波修复全完成，main = `4629477`）
+
+**01-06 notebook 双视角 UX 审查 + 三波修复全部完成** ✅
+
+委派 researcher 从生物医学专家（非生信背景）和生物信息学资深专家双视角审查 01-06 全部 12 个 notebook，发现系统性 UX 问题。按优先级分三波自主修复，全部通过独立 code-reviewer 审查并合并到 main。
+
+### 审查结论
+
+**整体可用性 4/5**。02-06 系列质量优秀，01 系列有系统性缺口。
+
+**评分矩阵亮点**：
+- 最佳 notebook：06_annotated（5/5 + 5/5 + 4/5 + 5/5）、03_normalized（4/5 + 4/5 + 3/5 + 5/5）、04_embedded（流程连贯性满分）
+- 最需改进：01_nowicki（2/5 + 3/5 + 2/5 + 2/5，无专用 PARAMS cell）、01_yue（2/5，参数文档极度稀疏 13 个 vs nancang 101 个）
+
+**P0 问题**（影响最广）：01 系列全面缺失 Stage Verdict 和回跑指引（5 个 notebook 全中）。PI 跑完 QC 后不知道是否可以进入 02，也不知道调参后如何安全重跑。
+
+### Wave 1（P0）：01 系列 Stage Verdict + 回跑指引
+
+**PR 类型**：本地 Review 路径（feature/01-verdict-rerun → main，commit 1d397d3）
+
+**改动**（+1512/-144 lines，5 files）：
+- 全部 5 个 01 notebook 各加一个「Stage 01 Verdict」markdown cell（末尾 checkpoint 后），含确认清单（4-9 项，按数据集定制）+ 下一步指引（指向 02_merged）
+- kim/nancang/nowicki/yue 各加一个「回跑与新版本」markdown cell（PARAMS/Setup 附近），从 template_10x 适配，含调参回跑步骤 + bump OUTPUT_VERSION + RUN_ID 目录结构说明
+- template_10x 仅加 Stage Verdict（回跑指引已有，未重复加）
+
+**独立 reviewer 验收**：APPROVE，P0/P1 全 PASS，零 code cell source 改动，JSON 合法性 5/5，产出清空 5/5。清单项定制性优秀（nancang 9 项含 SoupX、nowicki 6 项含作者标注列、kim/yue 各 6 项含 N_MAD 倍数）。回跑指引与 template 结构对齐，每个数据集的触发条件定制（如 nancang 含 SoupX 参数调整、nowicki 含 experiment_filter）。
+
+### Wave 2（P1）：参数文档补全 + PARAMS 重构 + 03 回跑指引
+
+**PR 类型**：本地 Review 路径（feature/w2-param-docs → main，commit 5026143）
+
+**改动**（+288/-73 lines，3 files）：
+- **01_yue.ipynb**：PARAMS cell 注释从 6 行扩展到 101 行，全部 23 个参数按四要素标准文档化（是什么/默认依据/调大调小影响/何时该改），类器官特异性指引（N_MAD=4-7、无 SoupX、无血红蛋白标记），零参数值改动
+- **01_nowicki.ipynb**：新增集中 PARAMS cell（cell[1]，13 参数，四组结构，58 行注释）；原散落参数 cell（4 个）保留并加引用注释（`VAR = VAR  # 值来自顶部 PARAMS cell`），执行兼容性不破坏
+- **03_normalized.ipynb**：新增「回跑与迭代」markdown cell（cell[9]，1512 字），三问结构（管线位置/为何回跑/如何回跑），4 个具体场景（HVG 缺 marker、PC1~library size、HVG 敏感度过高、无肘部），3 步回跑流程
+
+**独立 reviewer 验收**：APPROVE，P0/P1 全 PASS。01_yue 注释行数 101（目标≥30），四要素覆盖完整（13 个关键参数抽查全通过）。01_nowicki 集中 PARAMS 结构优秀，散落 cell 保留策略正确（执行顺序不破坏）。03 回跑指引内容充实，三问结构完整。参数值保留验证通过（N_MAD=4, QC_STRATEGY="adaptive", SOUPX_ENABLED=False 全部一致）。
+
+**备注**：02_merged 回跑指引因有开放 PR #190（另一台机器单行修复，test CI 失败）暂未动，避免冲突，待 PR #190 落定后补。
+
+### Wave 3（P2）：ADR 标记与开发术语清理
+
+**PR 类型**：本地 Review 路径（feature/w3-cleanup-adr → main，commit 4629477）
+
+**改动**（+1484/-76 lines，6 files）：
+- 移除全部 11 处 ADR 编号引用（ADR-0012×4、ADR-0013×3、ADR-0009×2、ADR-0003/0009×2）：
+  - `见 ADR-0012` → 直接删除（环境自检说明已自足）
+  - `（ADR-0009）` → `（框架设计目标）`
+  - `ADR-0003/0009` → `（薄框架设计：直接调用 scanpy 原生函数，不封装）`
+  - `device 自适应，见 ADR-0013` → `根据 CUDA/MPS/CPU 可用性自动选择`
+- 替换全部 7 处"纪律"术语为通俗说法：
+  - `内存纪律` → `内存管理` / `避免内存溢出`
+  - `P0-i 纪律：显式状态跨 cell 传递` → `显式状态标记，便于调试和中断重跑`
+  - `实现纪律` → `实现原则`
+- 涉及 6 个 notebook：03_normalized（1 处）、04_embedded（6 处）、05_clustered（1 处）、06_annotated（1 处）、06b_per_cluster（4 处）、06c_subset（5 处）
+
+**独立 reviewer 验收**：APPROVE，P0/P1 全 PASS。36 个改动行全部在注释或 markdown cell，零可执行代码改动。grep 验证 ADR/纪律残留=0。替换质量优秀（11 个 ADR + 7 个纪律全部有意义，不仅移除术语还补充了 WHY）。唯一 P2 问题为 Minor 不阻塞（06c 一处交叉引用表述略局促，可后续编辑轮次处理）。
+
+### 遗留项（低优先级，非阻塞）
+
+1. **02_merged 回跑指引**：待 PR #190 落定后补（避免冲突）
+2. **Wave 3 Minor**：06c_subset Cell 7 L17 交叉引用表述略局促，可后续优化
+3. **single-batch guard**：12 个 notebook 全面缺失对"单批次数据"的防护警告（审查报告 P1 共性问题，影响 Harmony/scVI/batch-aware HVG 等批次依赖方法，但需较大改动，留后续专项处理）
+
+### 流程验证
+
+三波全部严格走完 Worktree 先行协议 + coder（worktree）→ 独立 code-reviewer（新会话零 coder 上下文）→ 本地 Review 合并 + 推送远程的完整循环。每波 reviewer 都实地核验 JSON 合法性、零破坏、范围不越界、产出清空、核心意图达成，无一例外。主 Agent 亲验 git diff / git log / git push 结果，不信回报。
+
+**下一步**：PI 闸门项（scANVI 真跑、SoupX 偏差量化、LLM 多模型共识、第一波生物学结果）。开发侧当前无遗留待办。

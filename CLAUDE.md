@@ -8,33 +8,27 @@ updated: "2026-06-10"
 
 # CLAUDE.md — scRNA-seq整合分析框架
 
-> 本文件是**项目级**指令，叠加在顶级 `~/AI-OS/CLAUDE.md` + `SOUL.md` 之上。进入本项目时自动加载（CWD 触发）。
-> 行为约束指针还包括：`项目/_GitHub项目规范.md`（GitHub 仓库项目规则，进入时主 Agent 主动 Read）。
+> 继承 AI-OS 项目级规则（`~/project/my-ai-os/CLAUDE.md`），本文件仅定义 scRNA-seq 整合分析专属约束。进入时主 Agent 主动 Read `项目/_GitHub项目规范.md`。
 
-## 一、最高纪律：默认委派 subagent，主 Agent 只做思考/决策/调度，只碰"摘要 + 决策点 + 路径"
+## 一、委派纪律（scRNA-seq 专属禁区）
 
-**本项目反复出现主 Agent 越界自己干执行活、以及把长原文整篇读进来的问题。强制纠偏：判据不是"这是思考还是执行"，而是"这个动作会不会把大量原文 / 数据 / 日志拉进主 Agent 窗口"。会的，一律委派或定向化。**
+本项目**反复出现主 Agent 越界执行**的历史缺口，以下为子项目特有禁区（通用委派判据与纪律见全局 CLAUDE.md）：
 
-主 Agent **只做**：决策与判断、调度、写 brief、读 subagent 回报、verdict 路由、size/红线裁决、终审、ADR 撰写、与 PI 对话。
+主 Agent **在本项目额外禁止亲自做**：写/改代码与 notebook、跑 nbconvert/pytest/ruff、`gh pr merge`/worktree 清理/分支删除、CI 轮询、夹具生成与验证、跨文件 grep 排查。
 
-主 Agent **不亲自做**（必须委派）：写/改代码与 notebook、跑 nbconvert/pytest/ruff、`gh pr merge`/worktree 清理/分支删除、CI 轮询、夹具生成与验证、批量状态文件（`_plan.md`/`_memory.md`）维护、跨文件 grep 排查。
+`_plan.md`/`_memory.md` 维护分工：主 Agent 可做**单次小改动**（<50 行，如标注 verdict 结论）；**批量状态记账**（如 operator 收尾后更新多个字段、跨多个 PR 整理状态）委派 operator。
 
-> 唯一例外 (主 Agent 可直接做)：写 ADR/brief、短文件的元数据/状态编辑、输出有界的一次性 `ls`/`git log` 确认——**前提是读入成本极低，超出即委派。**
+> 例外（主 Agent 可直接做）：写 ADR/brief、短文件的元数据/状态编辑、输出有界的一次性 `ls`/`git log` 确认——**前提是读入成本极低，超出即委派。**
 
-## 二、三 agent 分工（代码规范在各 agent 定义内，此处只给路由）
+## 二、本项目 Agent 路由（典型场景）
 
-> **不在此重复代码规范**——coder 的红→绿测试纪律、四态验收、size 门槛、内存纪律执行，code-reviewer 的红线/审阅维度/回报契约，operator 的四态验收/清单门槛，全部以各自 agent 定义为准：
-> `.claude/agents/coder.md`、`.claude/agents/code-reviewer.md`、`.claude/agents/operator.md`。
+Agent 定义（代码规范、红线、回报契约）以 `.claude/agents/` 为准，此处仅给路由与典型场景：
 
-| 工作 | 委派给 | 本项目典型场景 |
-|---|---|---|
-| 写/改 **代码**（`src/scrna_integration/*.py`）、写/改 **notebook**（`notebooks/*.ipynb`）、写测试、调试、重构 | **coder** | read_with_manifest / scorers / 各 stage notebook / 夹具脚本 `scripts/make_test_subset.py` |
-| **PR diff 审查**（独立会话，与 coder 不同上下文）、verdict + issue 清单 + 回报契约 | **code-reviewer** | 每个 PR 合并前必经；产物是 src/notebook/CI/schema 的 diff 才归它 |
-| **非代码执行**：`gh pr merge` 收尾、CI 轮询、worktree 清理、远程分支删除、夹具生成/验证、`_plan.md`/`_memory.md` 批量状态维护、跨文件搜索整理、CLI 调用 | **operator** | PR 合并收尾（见 repo-loop）、跑 `make_test_subset.py` 生成夹具、状态记账 |
-
-> **⚠️ 委派纪律（每次调用 Agent 工具前必查）**：使用 Agent 工具时必须显式指定 `subagent_type` 参数（`"coder"` / `"code-reviewer"` / `"operator"` 等）。不填 `subagent_type` 会退化为通用 Agent，绕过角色约束——这是违规。通用 Agent 只在上表三类均不适用且有明确理由时才允许使用，且需在内部备注原因。
-
-**判定**：产物是代码/notebook → coder；产物是 diff 审查 verdict → code-reviewer；产物是被处理后的文件/git 状态/数据 → operator。
+| 委派给 | 本项目典型场景 |
+|---|---|
+| **coder** | `src/scrna_integration/*.py`、`notebooks/*.ipynb`、测试、调试、重构；夹具脚本 `scripts/make_test_subset.py` |
+| **code-reviewer** | 每个 PR 合并前必经；独立会话，不复用 coder 上下文；src/notebook/CI/schema diff |
+| **operator** | PR 合并收尾（repo-loop）、CI 轮询、worktree 清理、远程分支删除、夹具生成/验证、批量状态记账 |
 
 ## 三、每个 PR 的标准循环（主 Agent 编排，不亲自执行）
 
