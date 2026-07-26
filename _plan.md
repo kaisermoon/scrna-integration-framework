@@ -4,11 +4,11 @@ updated: "2026-07-26"
 phase: analysis
 ---
 
-## 进行中（2026-07-26）
+## 已完成（2026-07-26，main = `061bdee`）
 
-**per-dataset 模板按输入格式重构 + 教训回填**，分支 `refactor/format-templates-and-lesson-backport`，改动全部在工作区未提交（38 文件，+2423/-9319）。四个数据集专属 notebook 收敛为四个格式模板（10x_h5 / 10x_mtx / counts_matrix / h5ad），测试同步改名，新增 `docs/per-dataset-notebook-conventions.md` 与 `tests/test_io_gene_sync.py`。测试 1249 passed / 覆盖率 89.88%。
+**per-dataset 模板按输入格式重构 + 教训回填 + 公开仓隐私清理**，两个 commit 已合并 main 并 push，CI lint 绿。四个数据集专属 notebook 收敛为四个格式模板（10x_h5 / 10x_mtx / counts_matrix / h5ad），测试同步改名，新增 `docs/per-dataset-notebook-conventions.md` 与 `tests/test_io_gene_sync.py`。测试 1249 passed / 覆盖率 89.88%。
 
-**未提交原因**：规模远超 30 cell 认知复杂度上限且未过独立 code-reviewer → 待拆分为可审查 PR。模板运行验证待 PI 在 jupyter 手动跑。详见 `_memory.md` 2026-07-26 保存点。
+**遗留**：四个模板均为静态构建，jupyter 端到端运行验证待 PI 手动跑（建议 `01_template_10x_mtx`）。本次按 PI 指示跳过独立 code-reviewer。详见 `_memory.md` 2026-07-26 保存点。
 
 ## C 域收尾（2026-06-10 完成）
 
