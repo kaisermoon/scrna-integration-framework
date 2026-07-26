@@ -1,9 +1,9 @@
 {
   "generated_at": "2026-06-14T09:29:24+0800",
-  "generated_by": "env_parity.py snapshot on ZZS-Launcher",
+  "generated_by": "env_parity.py snapshot on linux-server",
   "machine": {
     "platform_tag": "linux-64",
-    "hostname": "ZZS-Launcher",
+    "hostname": "linux-server",
     "system": "Linux 5.10.134-12.2.al8.x86_64",
     "python_version": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:45:40) [GCC 14.3.0]",
     "conda_version": "conda 26.3.2",

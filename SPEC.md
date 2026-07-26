@@ -616,7 +616,7 @@ The `.R` script wraps `DESeqDataSetFromMatrix` → `DESeq` → `results(contrast
 - **Always pass `check=True`** to `subprocess.run` so a failing R script raises in Python instead of silently continuing.
 - **Read R-produced figures back into the notebook** (`IPython.display.Image`) so results stay visible in the notebook even though computation happened out of process.
 - **Temp dirs go under `results/_<tool>_tmp/`** (gitignored) and are cleaned at the end of the cell when large.
-- **RSCRIPT_BIN convention**: each notebook PARAMS cell declares the Rscript path (e.g. `RSCRIPT_BIN = "/Users/zhongzishao/miniforge3/envs/scrna-integration-r/bin/Rscript"`). Same convention across all R-using stages.
+- **RSCRIPT_BIN convention**: each notebook PARAMS cell declares the Rscript path (e.g. `RSCRIPT_BIN = "~/miniforge3/envs/scrna-integration-r/bin/Rscript"`). Same convention across all R-using stages.
 
 ### rpy2: removed from the pipeline
 

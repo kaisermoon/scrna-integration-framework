@@ -45,13 +45,15 @@ TSUBOSAKA_TARGET = 2000
 YUE_TARGET = 1000
 FIXTURE_B_TARGET = 6000
 
-# Source paths (READ-ONLY, must not write)
-KIM_DIR = Path("/Users/zhongzishao/Works/GCPL_scRNA/data/Kim_2025_Series GSE295401")
-NANCANG_DIR = Path("/Users/zhongzishao/Works/GCPL_scRNA/data/Nancang_2025_GSE249874")
-NOWICKI_PATH = "/Users/zhongzishao/Works/GCPL_scRNA/data/Nowicki_Osuch_et_al_2023/Nowicki_Osuch_et_al_2023.h5ad"
-TSUBOSAKA_PATH = "/Users/zhongzishao/Works/GCPL_scRNA/data/Tsubosaka_2023_HCA/data_9_9_annotated_seurat_all_ut.rds"
-YUE_DIR = Path("/Users/zhongzishao/Works/GCPL_scRNA/data/Yue_SSK_2025_GSE210991")
-FIXTURE_B_SOURCE = "/Users/zhongzishao/Works/GCPL_scRNA/results/data_objects/02_qc_filtered_data.h5ad"
+# Source paths (READ-ONLY, must not write). Based on home directory to
+# avoid hard-coding a real username path in the public repository.
+GCPL_ROOT = Path.home() / "Works" / "GCPL_scRNA"
+KIM_DIR = GCPL_ROOT / "data" / "Kim_2025_Series GSE295401"
+NANCANG_DIR = GCPL_ROOT / "data" / "Nancang_2025_GSE249874"
+NOWICKI_PATH = str(GCPL_ROOT / "data" / "Nowicki_Osuch_et_al_2023" / "Nowicki_Osuch_et_al_2023.h5ad")
+TSUBOSAKA_PATH = str(GCPL_ROOT / "data" / "Tsubosaka_2023_HCA" / "data_9_9_annotated_seurat_all_ut.rds")
+YUE_DIR = GCPL_ROOT / "data" / "Yue_SSK_2025_GSE210991"
+FIXTURE_B_SOURCE = str(GCPL_ROOT / "results" / "data_objects" / "02_qc_filtered_data.h5ad")
 
 # Output directory (gitignored, within worktree)
 OUTPUT_DIR = Path("data/_subset")

@@ -43,7 +43,7 @@ repo:
 
 - **路径**：项目目录本身就是 GitHub 仓库根，无外部路径
 - **大数据存放**：原始数据放 `data/raw/`（gitignore）；分析对象放 `results/data/`（gitignore）
-- **早期框架参考**：`/Users/zhongzishao/Works/GCPL_scRNA/`（已部分复制到 `references/legacy-GCPL/`）
+- **早期框架参考**：`~/Works/GCPL_scRNA/`（已部分复制到 `references/legacy-GCPL/`）
 
 ## 结构现状
 
@@ -73,4 +73,4 @@ repo:
 
 ## 数据集（已收集，部分）
 
-参见 `/Users/zhongzishao/Works/GCPL_scRNA/data/`：Kim 2025 / Nancang 2025 / Nowicki-Osuch 2023 / Tsubosaka 2023 / Yue 2025 等多个 GEO 数据集，整合方向为胃癌前病变 / 胃癌相关单细胞数据。后续将正式纳入框架的首个验证案例。
+参见 `~/Works/GCPL_scRNA/data/`：Kim 2025 / Nancang 2025 / Nowicki-Osuch 2023 / Tsubosaka 2023 / Yue 2025 等多个 GEO 数据集，整合方向为胃癌前病变 / 胃癌相关单细胞数据。后续将正式纳入框架的首个验证案例。
