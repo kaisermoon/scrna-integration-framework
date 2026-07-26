@@ -1,4 +1,4 @@
-"""测试 P1-e-kim：01_kim.ipynb 的 UX guided 骨架收尾。
+"""测试 10x h5 格式模板：01_template_10x_h5.ipynb 的 UX guided 骨架收尾。
 
 覆盖 PARAMS 四组化、preflight cell、科学参数四要素注释与红线守护。
 """
@@ -10,14 +10,14 @@ from pathlib import Path
 import pytest
 
 # ---------------------------------------------------------------------------
-# helpers（参照 test_p1c_doublet_kim.py）
+# helpers（参照 test_doublet_10x_h5.py）
 # ---------------------------------------------------------------------------
 
 _NOTEBOOK_PATH = (
     Path(__file__).resolve().parents[1]
     / "notebooks"
     / "01_per_dataset"
-    / "01_kim.ipynb"
+    / "01_template_10x_h5.ipynb"
 )
 
 
@@ -81,7 +81,7 @@ class TestParamsFourGroupRegression:
         nb = _load_notebook()
         env = _cell(nb, "=== PARAMS ===")
         # 组一
-        assert env.get("MANIFEST_PATH") == "data/kim/manifest.yaml"
+        assert isinstance(env.get("MANIFEST_PATH"), str) and env["MANIFEST_PATH"].endswith((".yaml", ".yml"))
         # 组二
         assert env.get("QC_STRATEGY") == "adaptive"
         assert env.get("N_MAD") == 3
@@ -106,9 +106,9 @@ class TestParamsFourGroupRegression:
         assert env.get("FLAG_HEMOGLOBIN") is False
         assert env.get("FLAG_STRESS_GENES") is True
         # 组四
-        assert env.get("RUN_ID") == "01-kim-v1-run001"
+        assert isinstance(env.get("RUN_ID"), str) and env["RUN_ID"].startswith("01-")
         assert env.get("RUN_ROOT") == "results/runs"
-        assert env.get("OUTPUT_FILENAME") == "01_kim_v1.h5ad"
+        assert isinstance(env.get("OUTPUT_FILENAME"), str) and env["OUTPUT_FILENAME"].startswith("01_") and env["OUTPUT_FILENAME"].endswith(".h5ad")
         assert env.get("OUTPUT_VERSION") == 1
         assert env.get("RANDOM_SEED") == 42
 
@@ -117,7 +117,6 @@ class TestParamsFourGroupRegression:
         nb = _load_notebook()
         env = _cell(nb, "=== PARAMS ===")
         defaults = {
-            "MANIFEST_PATH": "data/kim/manifest.yaml",
             "QC_STRATEGY": "adaptive",
             "N_MAD": 3,
             "PER_SAMPLE_MAD": True,
@@ -265,7 +264,7 @@ class TestPreflightHappyPath:
 
         # 创建合法 manifest
         manifest_content = {
-            "input": {"format": "h5ad", "path": str(dummy_h5ad)},
+            "input": {"format": "10x_h5", "path": str(dummy_h5ad)},
             "source_dataset": "kim_test",
         }
         manifest_path = tmp_path / "manifest.yaml"
@@ -316,7 +315,7 @@ class TestPreflightErrorPaths:
         dummy_h5ad = tmp_path / "dummy.h5ad"
         dummy_h5ad.write_bytes(b"")
         with open(manifest_path, "w") as f:
-            yaml.dump({"input": {"format": "h5ad", "path": str(dummy_h5ad)}, "source_dataset": "test"}, f)
+            yaml.dump({"input": {"format": "10x_h5", "path": str(dummy_h5ad)}, "source_dataset": "test"}, f)
 
         nb = _load_notebook()
         params_env = _cell(nb, "=== PARAMS ===")
@@ -337,7 +336,7 @@ class TestPreflightErrorPaths:
         dummy_h5ad = tmp_path / "dummy.h5ad"
         dummy_h5ad.write_bytes(b"")
         with open(manifest_path, "w") as f:
-            yaml.dump({"input": {"format": "h5ad", "path": str(dummy_h5ad)}, "source_dataset": "test"}, f)
+            yaml.dump({"input": {"format": "10x_h5", "path": str(dummy_h5ad)}, "source_dataset": "test"}, f)
 
         nb = _load_notebook()
         params_env = _cell(nb, "=== PARAMS ===")
@@ -359,7 +358,7 @@ class TestPreflightErrorPaths:
         dummy_h5ad = tmp_path / "dummy.h5ad"
         dummy_h5ad.write_bytes(b"")
         with open(manifest_path, "w") as f:
-            yaml.dump({"input": {"format": "h5ad", "path": str(dummy_h5ad)}, "source_dataset": "test"}, f)
+            yaml.dump({"input": {"format": "10x_h5", "path": str(dummy_h5ad)}, "source_dataset": "test"}, f)
 
         nb = _load_notebook()
         params_env = _cell(nb, "=== PARAMS ===")

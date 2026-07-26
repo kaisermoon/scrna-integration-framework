@@ -1,4 +1,4 @@
-"""P1-c-yue：01_yue.ipynb doublet 三态政策行为测试与静态源码断言。
+"""P1-c: counts matrix 格式模板 doublet 三态政策行为测试与静态源码断言。
 
 覆盖：
 - 三态赋值（singlet/uncertain/doublet）
@@ -38,7 +38,7 @@ DOUBLET_MIN_CELLS = 50
 
 NB_PATH = (
     Path(__file__).resolve().parent.parent
-    / "notebooks" / "01_per_dataset" / "01_yue.ipynb"
+    / "notebooks" / "01_per_dataset" / "01_template_counts_matrix.ipynb"
 )
 
 

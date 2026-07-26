@@ -58,6 +58,11 @@ tests/fixtures/
 !data/*/manifest.yaml
 # 抽样脚本进 git（可复现夹具，不依赖外部全量数据）
 !scripts/**
+# 但白名单不能把 Python 字节码带进来（!scripts/** 会覆盖顶部的 __pycache__/ 规则）
+scripts/__pycache__/
+
+# 内部工作稿：coder brief 与审计报告，含真实绝对路径，公开仓不收
+docs/audit/
 
 # 分析中间产物
 results/*.csv
@@ -69,7 +74,10 @@ results/_hdWGCNA_tmp/
 # hdWGCNA 真跑副产物：拓扑重叠矩阵（~11MB .rda），每次运行生成
 TOM/
 results/_soupx_tmp/
+results/_monocle3_tmp/
 *.tmp
+# R 运行副产物：无显示设备时 R 绘图默认落盘为此文件
+Rplots.pdf
 
 # scanpy 自动创建的 figures/ 目录（CWD root）
 figures/

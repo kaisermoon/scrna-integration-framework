@@ -26,7 +26,8 @@ Anything else (run metadata, lineage, QC heterogeneity records, disease-ontology
 ## Pipeline overview
 
 ```
-01_per_dataset/{dataset}.ipynb  →  per-dataset h5ad (MAD-based QC, scrublet, SoupX, cell cycle, complexity)
+01_per_dataset/01_template_{fmt}.ipynb  →  per-dataset h5ad (MAD-based QC, scrublet, SoupX, cell cycle, complexity)
+                                           fmt ∈ {10x_mtx, 10x_h5, h5ad, counts_matrix}; copy the one matching your input format
 02_merged.ipynb                 →  merged h5ad (anndata.concat inner join + cross-dataset diagnostics)
 03_normalized.ipynb             →  normalized h5ad (log1p + batch-aware HVG + HVG exclusion list)
 04_embedded.ipynb               →  embedded h5ad (PCA + Harmony + scVI + sweep + integration metrics)

@@ -487,15 +487,96 @@ _RUNTIME_PROVENANCE_KEYS = frozenset("python platform git_available git_commit g
 _MANIFEST_COMMON_KEYS = frozenset("schema_version run_id stage stage_status started_at completed_at inputs effective_parameters runtime_provenance method_status hard_postconditions warnings artifacts".split())
 
 
-def prepare_run(root: str | Path, run_id: str) -> RunPaths:
-    """为新 RUN_ID 建立 draft；已存在的 RUN_ID 一律拒绝覆盖。"""
+def prepare_run(root: str | Path, run_id: str, *, on_exists: str = "error") -> RunPaths:
+    """为新 RUN_ID 建立 draft 目录结构。
 
+    Parameters
+    ----------
+    root : str | Path
+        RUN_ROOT 路径。
+    run_id : str
+        唯一运行的标识符，须匹配 _RUN_ID_RE。
+    on_exists : str
+        - ``"error"``（默认）：run_id 对应的目录已存在时抛 FileExistsError，
+          行为与老版本完全一致。这是 provenance 语义的保证——已有结果不可被
+          静默覆盖。
+        - ``"increment"``：目录已存在时自动递增 run_id 末尾的数字后缀，
+          保持原有位数（``run-001`` → ``run-002``，不退化位数）；
+          原 run_id 无数字后缀时追加 ``-2``、``-3``。
+          尝试 1000 次仍失败抛 RuntimeError。
+
+    Returns
+    -------
+    RunPaths
+
+    Raises
+    ------
+    ValueError
+        run_id 非法或 on_exists 传入不可识别的值。
+    FileExistsError
+        on_exists="error" 且 run_id 已存在。
+    RuntimeError
+        on_exists="increment" 且 1000 次尝试后仍未找到可用目录。
+    """
     if not _RUN_ID_RE.fullmatch(run_id):
         raise ValueError("run_id may contain only letters, digits, '.', '_' and '-'")
+    if on_exists not in ("error", "increment"):
+        raise ValueError(
+            f"on_exists must be 'error' or 'increment', got {on_exists!r}"
+        )
+
     root_path = Path(root).resolve()
     root_path.mkdir(parents=True, exist_ok=True)
+
+    if on_exists == "increment":
+        original_run_id = run_id
+        attempt = 1
+        max_attempts = 1000  # 防止无限循环的信号量上限
+
+        while attempt <= max_attempts:
+            candidate_dir = root_path / run_id
+            if not candidate_dir.exists():
+                break
+
+            # 目录已存在，从原始 run_id 提取末尾数后缀并递增
+            match = re.search(r"(\d+)$", original_run_id)
+            if match:
+                base = original_run_id[: match.start()]
+                num = int(match.group(1))
+                width = len(match.group(1))  # 保持原有位数（001 → 002，不变成 2）
+                run_id = f"{base}{num + attempt:0{width}d}"
+            else:
+                # 无数字后缀，追加 -2, -3, ...
+                run_id = f"{original_run_id}-{attempt + 1}"
+
+            attempt += 1
+
+        if attempt > max_attempts:
+            raise RuntimeError(
+                f"无法为 run_id '{original_run_id}' 找到可用目录"
+                f"（尝试了 {max_attempts} 次）"
+            )
+
+        # 递增后的 run_id 必须仍满足命名规范
+        if not _RUN_ID_RE.fullmatch(run_id):
+            raise RuntimeError(
+                f"递增后的 run_id '{run_id}' 不符合命名规范"
+            )
+
+        if run_id != original_run_id:
+            print(
+                f"[INFO] run_id '{original_run_id}' 目录已存在，"
+                f"自动递增为 '{run_id}'"
+            )
+
+        paths = RunPaths(run_id=run_id, run_dir=root_path / run_id)
+        paths.run_dir.mkdir()
+        paths.draft_dir.mkdir()
+        return paths
+
+    # on_exists == "error" —— 行为与现在完全一致
     paths = RunPaths(run_id=run_id, run_dir=root_path / run_id)
-    paths.run_dir.mkdir()
+    paths.run_dir.mkdir()  # 目录已存在时 FileExistsError
     paths.draft_dir.mkdir()
     return paths
 

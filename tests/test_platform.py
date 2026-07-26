@@ -78,6 +78,9 @@ def test_rscript_bin_custom_env_name(monkeypatch):
 
 def test_rscript_bin_fallback_to_which_when_derived_missing(monkeypatch, tmp_path):
     """CONDA_PREFIX 指向的位置下没有 scrna-integration-r → 回退到 PATH。"""
+    # 防止 home 探测（优先级 1）意外命中本机真实 Rscript
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
     # 创建一个不存在的 envs 目录场景
     fake_prefix = str(tmp_path / "nonexistent_envs" / "scrna-integration")
     os.makedirs(fake_prefix, exist_ok=True)
@@ -96,6 +99,27 @@ def test_rscript_bin_fallback_to_which_when_derived_missing(monkeypatch, tmp_pat
 
 
 # ---------------------------------------------------------------------------
+# 测试：CONDA_PREFIX 未设置，但 home 目录下有常见 conda 安装
+# ---------------------------------------------------------------------------
+
+
+def test_rscript_bin_from_home_probing_when_no_conda_prefix(monkeypatch, tmp_path):
+    """CONDA_PREFIX 未设置 + home 下有 miniforge3 → 命中探测。"""
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
+    # PATH 中不设 Rscript，确保只走 home 探测路径
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    # monkeypatch Path.home() 指向 tmp_path，在其中创建 miniforge3 结构
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    home_install = tmp_path / "miniforge3"
+    expected = _make_fake_envs_dir(str(home_install))
+
+    result = rscript_bin()
+    assert result == expected
+    assert os.path.isfile(result)
+
+
+# ---------------------------------------------------------------------------
 # 测试：CONDA_PREFIX 未设置，但 PATH 中有 Rscript
 # ---------------------------------------------------------------------------
 
@@ -103,6 +127,8 @@ def test_rscript_bin_fallback_to_which_when_derived_missing(monkeypatch, tmp_pat
 def test_rscript_bin_from_path_when_no_conda_prefix(monkeypatch, tmp_path):
     """CONDA_PREFIX 未设置 → 回退到 shutil.which。"""
     monkeypatch.delenv("CONDA_PREFIX", raising=False)
+    # 防止 home 探测（优先级 1）意外命中本机真实 Rscript
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
 
     fake_rscript = tmp_path / "Rscript"
     fake_rscript.write_text("#!/bin/bash\necho 'PATH only'\n")
@@ -121,6 +147,8 @@ def test_rscript_bin_from_path_when_no_conda_prefix(monkeypatch, tmp_path):
 def test_rscript_bin_raises_when_not_found(monkeypatch, tmp_path):
     """CONDA_PREFIX 未设置 + PATH 中无 Rscript → 抛出 RuntimeError。"""
     monkeypatch.delenv("CONDA_PREFIX", raising=False)
+    # 防止 home 探测（优先级 1）意外命中本机真实 Rscript
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
     # 设置一个不包含 Rscript 的 PATH
     monkeypatch.setenv("PATH", str(tmp_path))
 
@@ -131,6 +159,8 @@ def test_rscript_bin_raises_when_not_found(monkeypatch, tmp_path):
 def test_rscript_bin_raises_includes_env_name_in_message(monkeypatch, tmp_path):
     """异常消息中包含传入的 r_env_name。"""
     monkeypatch.delenv("CONDA_PREFIX", raising=False)
+    # 防止 home 探测（优先级 1）意外命中本机真实 Rscript
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
     monkeypatch.setenv("PATH", str(tmp_path))
 
     with pytest.raises(RuntimeError, match="my-special-r"):

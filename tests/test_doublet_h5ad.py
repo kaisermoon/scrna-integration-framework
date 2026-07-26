@@ -1,4 +1,4 @@
-"""P1-c: doublet 三态政策测试 — nowicki（nowicki 特有：scrublet 输入取 layers["counts"]，不取 X）。
+"""P1-c: doublet 三态政策测试 — h5ad 格式模板（h5ad 特有：scrublet 输入取 layers["counts"]，不取 X）。
 
 覆盖：
 1. classify_doublets 三态边界语义

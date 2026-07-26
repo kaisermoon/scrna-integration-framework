@@ -951,15 +951,15 @@ A second notebook (`06b_per_cluster.ipynb`) loops over clusters and emits one ma
 
 ## Notebooks (Directly Runnable, Not Templates)
 
-The `notebooks/` directory contains **directly runnable notebooks**, not templates. PI edits the PARAMS cell at the top and runs all cells — no copy / rename ceremony. The framework's standardisation ships as the actual notebook content, not as a template-instantiation system.
+The `notebooks/` directory contains **directly runnable notebooks**, not a template-instantiation system. PI edits the PARAMS cell at the top and runs all cells — no copy / rename ceremony for Stage 02 onwards. Stage 01 is the one exception: it ships four notebooks named by input data format (`01_template_*`), each runnable as-is against the `data/_subset/` fixtures and intended to be copied per dataset. The framework's standardisation ships as the actual notebook content, not as a generator.
 
 ```
 notebooks/
 ├── 01_per_dataset/              # per-dataset independent QC (ADR-0011)
-│   ├── 01_nancang.ipynb         #   Nancang 2025 — adaptive QC + scrublet + SoupX + cell cycle + complexity
-│   ├── 01_kim.ipynb             #   Kim 2023 — organoid QC (higher MT% baseline)
-│   ├── 01_nowicki.ipynb         #   Nowicki-Osuch 2023 — adaptive + skip doublet (author pre-filtered)
-│   └── 01_yue.ipynb             #   Yue 2024 — organoid QC (higher MT% baseline)
+│   ├── 01_template_10x_mtx.ipynb        #   10x mtx (CellRanger filtered_feature_bc_matrix/) — adaptive QC + scrublet + SoupX + cell cycle
+│   ├── 01_template_10x_h5.ipynb         #   10x h5 (filtered_feature_bc_matrix.h5) — read_10x_h5 + var_names_make_unique
+│   ├── 01_template_h5ad.ipynb           #   pre-processed h5ad (CELLxGENE / HCA) — .raw extraction + obs_mapping + skip mode
+│   └── 01_template_counts_matrix.ipynb  #   tsv_matrix (gzip tab-separated counts table) — manual table read + QC metric back-fill
 ├── 02_merged.ipynb              # anndata.concat(join="inner") + cross-dataset diagnostics + QC report aggregation
 ├── 03_normalized.ipynb          # normalize + log1p (+ optional Pearson residuals) + batch-aware HVG + HVG exclusion list + scalar-or-sweep
 ├── 04_embedded.ipynb            # PCA + Harmony + scVI + scANVI; elbow plot + N_NEIGHBORS sweep + HARMONY_THETA sweep + integration metrics
@@ -1051,7 +1051,7 @@ One notebook per source dataset. Each follows the same structural template with 
 [code] # write h5ad, del adata, gc.collect
 ```
 
-**Convention**: when adding a new dataset, copy the closest existing per-dataset notebook (e.g. copy `01_nancang.ipynb` for another tissue biopsy; copy `01_kim.ipynb` for another organoid), update the PARAMS cell with the new manifest path and dataset-specific thresholds, and add the path to `02_merged.ipynb`'s `PER_DATASET_PATHS` list.
+**Convention**: the four Stage-01 notebooks are named by **input data format**, not by dataset — a dataset belongs to the downstream project, whereas the format is the reusable skeleton the framework should supply. When adding a new dataset, copy the template matching its input format (`01_template_10x_mtx` for a CellRanger `filtered_feature_bc_matrix/` directory, `01_template_10x_h5` for a `.h5`, `01_template_h5ad` for an author-preprocessed `.h5ad`, `01_template_counts_matrix` for a gzip tab-separated counts table), rename the copy after the dataset, fill in the placeholders in the PARAMS cell (manifest path, `DATA_SOURCE_ID`, dataset-specific thresholds), and add the output path to `02_merged.ipynb`'s `PER_DATASET_PATHS` list. The templates ship pointing at the `data/_subset/` fixtures, so a fresh checkout runs as-is.
 
 #### `02_merged.ipynb` (cross-dataset merge + diagnostics)
 
@@ -1059,10 +1059,8 @@ One notebook per source dataset. Each follows the same structural template with 
 [md]   # 02: Multi-dataset merge + cross-dataset QC diagnostics
 [code] # === PARAMS ===
        PER_DATASET_PATHS = [
-           "results/01_nancang_v1.h5ad",
-           "results/01_kim_v1.h5ad",
-           "results/01_nowicki_v1.h5ad",
-           "results/01_yue_v1.h5ad",
+           "results/01_<dataset_a>_v1.h5ad",
+           "results/01_<dataset_b>_v1.h5ad",
        ]
        OUTPUT_PATH = "results/02_merged_v1.h5ad"
        JOIN_GENES = "inner"

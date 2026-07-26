@@ -140,7 +140,9 @@ read_10x_like <- function(mtx_dir, label) {
 # ===========================================================================
 
 filtered <- read_10x_like(filtered_mtx_dir, "filtered")
+cat("[SoupX] step=load_filtered\n"); flush.console()
 raw      <- read_10x_like(raw_mtx_dir, "raw")
+cat(sprintf("[SoupX] step=load_raw  raw_cells=%d\n", ncol(raw$counts))); flush.console()
 
 # ===========================================================================
 # 段 E：基因对齐（仅对齐基因维度，不对齐 barcode）
@@ -269,6 +271,7 @@ if (!is.null(clusters) && length(clusters) > 0) {
 } else {
   cat("[SoupX] setClusters: skipped (clustering unavailable), autoEstCont will estimate without cluster info\n")
 }
+cat("[SoupX] step=create_soup_channel\n"); flush.console()
 
 # ===========================================================================
 # 段 I：autoEstCont 估计 + adjustCounts 校正
@@ -284,7 +287,7 @@ if (!is.null(clusters) && length(clusters) > 0) {
 #   — 校正失败意味着污染估计完全不可靠，强行继续等于默认数据无污染，
 #     这是比"不校正"更危险的隐性错误。
 
-cat("[SoupX] running autoEstCont (estimating contamination fraction)...\n")
+cat("[SoupX] running autoEstCont (estimating contamination fraction)...\n"); flush.console()
 method_params <- "default"  # 记录实际生效的参数级别
 
 sc <- tryCatch({
@@ -320,9 +323,10 @@ cat(sprintf("[SoupX] estimated contamination (rho): median=%.4f, mean=%.4f, max=
 # 写 rho.txt（保留历史契约）
 writeLines(as.character(rho_global), file.path(work_dir, "rho.txt"))
 cat(sprintf("  rho (contamination fraction): %.4f\n", rho_global))
+cat("[SoupX] step=estimate_soup\n"); flush.console()
 
 # adjustCounts 校正
-cat("[SoupX] running adjustCounts (correcting counts)...\n")
+cat("[SoupX] running adjustCounts (correcting counts)...\n"); flush.console()
 corrected <- tryCatch({
   adjustCounts(sc)
 }, error = function(e) {
@@ -330,6 +334,7 @@ corrected <- tryCatch({
 })
 
 cat(sprintf("[SoupX] corrected counts: %d genes x %d cells\n", nrow(corrected), ncol(corrected)))
+cat("[SoupX] step=adjust_counts\n"); flush.console()
 
 # ===========================================================================
 # 段 J：写出产物
@@ -384,5 +389,6 @@ umi_retained <- if (total_umi_before > 0) 100 * total_umi_after / total_umi_befo
 cat(sprintf("[SoupX] summary: %d cells, %d genes, UMI retained: %.1f%% (before=%.0f, after=%.0f)\n",
             n_cells_filtered, n_genes, umi_retained, total_umi_before, total_umi_after))
 
+cat("[SoupX] step=done\n"); flush.console()
 # 显式 quit(status=0) 确保正常退出码
 quit(save = "no", status = 0)

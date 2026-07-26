@@ -16,8 +16,8 @@
 在不同机器上不同。例如：
   - Mac:  /Users/alice/miniforge3/envs/scrna-integration-r/bin/Rscript
   - Linux: /home/bob/miniforge3/envs/scrna-integration-r/bin/Rscript
-  - 本机（巧合）：/Users/zhongzishao/miniforge3/...（Alibaba Cloud Linux，
-    用户名恰好是 zhongzishao，路径含 /Users/ 纯属巧合，不是 Mac）
+  - 注意：某些 Linux 发行版的 home 目录也可能位于 /Users/ 下，
+    因此不能靠路径里是否含 /Users/ 来判断操作系统。
 
 如果 notebook 里硬编码绝对路径，换一台机器就坏。正确做法是从运行时
 环境变量动态推导——conda 激活后会设置 ``CONDA_PREFIX`` 指向当前环境
@@ -25,9 +25,12 @@
 
 回退链设计
 ----------
-1. 首选：从 CONDA_PREFIX 环境变量派生（conda 环境激活时自动设置）。
+0. 首优：从 CONDA_PREFIX 环境变量派生（conda 环境激活时自动设置）。
    推导公式：``dirname(CONDA_PREFIX) / {r_env_name} / bin / Rscript``。
-   这覆盖了 99% 的正常使用场景。
+   显式激活的 conda 环境优先于 home 目录猜测——用户意图优先。
+1. 次选：直接探测 ~/miniforge3/、~/miniconda3/、~/anaconda3/ 下
+   ``{r_env_name}`` 环境的 Rscript。覆盖 CONDA_PREFIX 未设置场景
+   （notebook kernel 不一定激活了 conda 环境）。
 2. 回退一：调用 ``shutil.which("Rscript")`` 在系统 PATH 中查找。
    用于 conda 未激活但 Rscript 已在 PATH 中的场景。
 3. 回退二（最终兜底）：抛出清晰的中文异常，提示用户激活或创建
@@ -40,6 +43,7 @@ from __future__ import annotations
 import os
 import platform as _platform
 import shutil
+from pathlib import Path
 
 
 def platform_tag() -> str:
@@ -119,7 +123,9 @@ def rscript_bin(r_env_name: str = "scrna-integration-r") -> str:
     >>> # 如果环境名不同：
     >>> RSCRIPT_BIN = rscript_bin(r_env_name="scrna-integration-r-dev")
     """
-    # ---- 首选：从当前激活的 conda 环境推导 ----
+    # ---- 优先级0：从当前激活的 conda 环境推导 ----
+    # 显式激活的 conda 环境优先于 home 目录猜测：CONDA_PREFIX 代表用户
+    # 明确选择的当前环境，其同安装根下的 R 环境是最可能正确的那个。
     conda_prefix = os.environ.get("CONDA_PREFIX", "")
     if conda_prefix:
         # conda 环境目录结构：
@@ -131,20 +137,34 @@ def rscript_bin(r_env_name: str = "scrna-integration-r") -> str:
         if os.path.isfile(candidate):
             return candidate
 
-    # ---- 回退一：在系统 PATH 中查找 Rscript ----
+    # ---- 优先级1：直接探测常见 conda 安装路径 ----
+    # CONDA_PREFIX 在 notebook kernel 中可能未设置（kernel 不一定激活了 conda
+    # 环境），此时无法通过派生路径找到 R 环境。直接探测 ~/miniforge3/、
+    # ~/miniconda3/、~/anaconda3/ 下的 R 环境，覆盖绝大多数安装场景。
+    # 为什么用 Path.home() 而非写死绝对路径：ADR-0010 禁写机器特定路径，
+    # reviewer 会卡；~ 前缀在不同用户下的展开结果可在任意 Linux/macOS 上运行。
+    home = Path.home()
+    for install_dir in ["miniforge3", "miniconda3", "anaconda3"]:
+        candidate = str(home / install_dir / "envs" / r_env_name / "bin" / "Rscript")
+        if os.path.isfile(candidate):
+            return candidate
+
+    # ---- 回退二：在系统 PATH 中查找 Rscript ----
     which_result = shutil.which("Rscript")
     if which_result is not None:
         return which_result
 
-    # ---- 回退二：无法定位，抛出清晰异常 ----
+    # ---- 回退三：无法定位，抛出清晰异常 ----
     raise RuntimeError(
         f"无法定位 Rscript 可执行文件。\n"
         f"\n"
         f"已尝试以下方式：\n"
-        f"  1. 从 CONDA_PREFIX 派生同 conda 安装下的 "
+        f"  0. 从 CONDA_PREFIX 派生同 conda 安装下的 "
         f"'{r_env_name}' 环境路径\n"
         f"     → 当前 CONDA_PREFIX="
         f"{conda_prefix!r}（{'未设置' if not conda_prefix else '已设置，但派生路径不存在'}）\n"
+        f"  1. 直接探测常见 conda 路径下的 '{r_env_name}' 环境\n"
+        f"     → 未找到（检查了 miniforge3/miniconda3/anaconda3）\n"
         f"  2. 在系统 PATH 中搜索 'Rscript'\n"
         f"     → 未找到\n"
         f"\n"

@@ -1,6 +1,6 @@
 """Per-leaf static JSON/AST tests for P1-c-template doublet three-state logic.
 
-Tests validate the 01_template_10x.ipynb notebook without executing cells
+Tests validate the 01_template_10x_mtx.ipynb notebook without executing cells
 (no manifest/real data needed).  Follows the test_pr1c1_stage04.py pattern
 of json.loads + marker-anchored cell extraction.
 """
@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-NOTEBOOK = ROOT / "notebooks/01_per_dataset/01_template_10x.ipynb"
+NOTEBOOK = ROOT / "notebooks/01_per_dataset/01_template_10x_mtx.ipynb"
 
 
 def _source(cell: dict) -> str:

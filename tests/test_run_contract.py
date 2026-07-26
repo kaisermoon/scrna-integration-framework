@@ -274,6 +274,48 @@ def test_prepare_run_rejects_duplicate_run_id(tmp_path: Path) -> None:
         prepare_run(tmp_path, "run-001")
 
 
+def test_prepare_run_increment_preserves_digit_width(tmp_path: Path) -> None:
+    """on_exists='increment' 时保持位数：run-001 → run-002 → run-003。"""
+    p1 = prepare_run(tmp_path, "run-001", on_exists="increment")
+    assert p1.run_id == "run-001"
+
+    p2 = prepare_run(tmp_path, "run-001", on_exists="increment")
+    assert p2.run_id == "run-002"
+
+    p3 = prepare_run(tmp_path, "run-001", on_exists="increment")
+    assert p3.run_id == "run-003"
+
+    # 确认三个目录都存在
+    assert (tmp_path / "run-001").is_dir()
+    assert (tmp_path / "run-002").is_dir()
+    assert (tmp_path / "run-003").is_dir()
+
+
+def test_prepare_run_increment_appends_dash_for_no_digit_suffix(tmp_path: Path) -> None:
+    """原 run_id 无数字后缀时追加 -2、-3。"""
+    p1 = prepare_run(tmp_path, "my-run", on_exists="increment")
+    assert p1.run_id == "my-run"
+
+    p2 = prepare_run(tmp_path, "my-run", on_exists="increment")
+    assert p2.run_id == "my-run-2"
+
+    p3 = prepare_run(tmp_path, "my-run", on_exists="increment")
+    assert p3.run_id == "my-run-3"
+
+    assert (tmp_path / "my-run").is_dir()
+    assert (tmp_path / "my-run-2").is_dir()
+    assert (tmp_path / "my-run-3").is_dir()
+
+
+def test_prepare_run_rejects_invalid_on_exists_value(tmp_path: Path) -> None:
+    """非法 on_exists 值抛 ValueError，不静默降级。"""
+    with pytest.raises(ValueError, match="on_exists must be"):
+        prepare_run(tmp_path, "run-001", on_exists="overwrite")
+
+    with pytest.raises(ValueError, match="on_exists must be"):
+        prepare_run(tmp_path, "run-001", on_exists="")
+
+
 def test_atomic_json_write_is_no_clobber_and_leaves_no_temp_file(tmp_path: Path) -> None:
     destination = tmp_path / "manifest.json"
     atomic_write_json(destination, {"value": 1})

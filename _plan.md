@@ -1,8 +1,14 @@
 ---
 title: "执行计划：scRNA-seq整合分析框架"
-updated: "2026-07-10"
+updated: "2026-07-26"
 phase: analysis
 ---
+
+## 进行中（2026-07-26）
+
+**per-dataset 模板按输入格式重构 + 教训回填**，分支 `refactor/format-templates-and-lesson-backport`，改动全部在工作区未提交（38 文件，+2423/-9319）。四个数据集专属 notebook 收敛为四个格式模板（10x_h5 / 10x_mtx / counts_matrix / h5ad），测试同步改名，新增 `docs/per-dataset-notebook-conventions.md` 与 `tests/test_io_gene_sync.py`。测试 1249 passed / 覆盖率 89.88%。
+
+**未提交原因**：规模远超 30 cell 认知复杂度上限且未过独立 code-reviewer → 待拆分为可审查 PR。模板运行验证待 PI 在 jupyter 手动跑。详见 `_memory.md` 2026-07-26 保存点。
 
 ## C 域收尾（2026-06-10 完成）
 

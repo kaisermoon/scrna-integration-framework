@@ -1,4 +1,4 @@
-"""P0-d: expression_contract 测试 — Nowicki (normalized_log1p + .raw.X)."""
+"""P0-d: expression_contract 测试 — h5ad 格式模板 (normalized_log1p + .raw.X)."""
 
 from __future__ import annotations
 

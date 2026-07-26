@@ -63,7 +63,7 @@ repo:
 | 阶段 | notebook | 说明 |
 |------|----------|------|
 | 前置 | `notebooks/00_propose_obs_manifest.ipynb` | obs 映射清单辅助生成 |
-| 每来源接入 + QC | `notebooks/01_per_dataset/`（`01_template_10x` 骨架 + `01_kim`/`01_nancang`/`01_nowicki`/`01_yue`） | 每来源一个 notebook，字段映射/QC/断言在 cell |
+| 每来源接入 + QC | `notebooks/01_per_dataset/` 四个格式模板（`01_template_10x_mtx` / `01_template_10x_h5` / `01_template_h5ad` / `01_template_counts_matrix`） | 按**输入数据格式**命名（数据集属下游项目资产，格式才是框架骨架）；接新数据集复制对应格式模板改 PARAMS；字段映射/QC/断言在 cell |
 | 合并 | `notebooks/02_merged.ipynb` | concat + 合并质控 |
 | 归一化 / HVG | `notebooks/03_normalized.ipynb` | 归一化状态判定 + HVG |
 | 降维去批次 | `notebooks/04_embedded.ipynb` | PCA/Harmony/scVI/scANVI 多方法并存比较 |

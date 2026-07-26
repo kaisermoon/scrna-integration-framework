@@ -44,7 +44,7 @@ def _build_synthetic_yue_adata(
 def _establish_contract_yue(adata: anndata.AnnData) -> dict:
     """在 adata 上建立 Yue 的 expression_contract + layers['counts']（阶段 1：加载 cell）。
 
-    与 01_yue.ipynb 数据加载 cell 实现一致：
+    与 01_template_counts_matrix.ipynb 数据加载 cell 实现一致：
     - 建立 layers["counts"]（CSR float32）
     - 写入 expression_contract，counts_validated=False（校验在 checkpoint cell）
     返回建立后的 contract dict。
@@ -67,7 +67,7 @@ def _establish_contract_yue(adata: anndata.AnnData) -> dict:
 def _validate_counts_in_checkpoint(adata: anndata.AnnData) -> dict:
     """模拟 checkpoint cell 中的 counts 校验（阶段 2：checkpoint）。
 
-    与 01_yue.ipynb checkpoint cell 实现一致：
+    与 01_template_counts_matrix.ipynb checkpoint cell 实现一致：
     - 非负校验
     - 近整数校验（float32 浮点误差 < 1e-6）
     - 更新 counts_validated=True, counts_integer_check="full"
@@ -355,7 +355,7 @@ class TestEdgeCases:
 
 
 class TestNotebookIntegration:
-    """模拟 01_yue.ipynb 从数据加载到 checkpoint 的 counts 契约流程。"""
+    """模拟 01_template_counts_matrix.ipynb 从数据加载到 checkpoint 的 counts 契约流程。"""
 
     def test_full_flow_load_to_checkpoint(self) -> None:
         """端到端：数据加载 → 建 counts 契约 → checkpoint 校验。"""

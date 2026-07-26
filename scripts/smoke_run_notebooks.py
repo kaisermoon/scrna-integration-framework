@@ -38,11 +38,13 @@ RUN_ROOT = Path(PROJECT_ROOT) / "results" / "runs"
 
 # Notebook list in execution order
 NOTEBOOKS = [
-    # Stage 01 - per dataset (4)
-    {"name": "01_kim", "notebook": "notebooks/01_per_dataset/01_kim.ipynb", "expected_stage": "01_qcd"},
-    {"name": "01_nancang", "notebook": "notebooks/01_per_dataset/01_nancang.ipynb", "expected_stage": "01_qcd"},
-    {"name": "01_nowicki", "notebook": "notebooks/01_per_dataset/01_nowicki.ipynb", "expected_stage": "01_qcd"},
-    {"name": "01_yue", "notebook": "notebooks/01_per_dataset/01_yue.ipynb", "expected_stage": "01_qcd"},
+    # Stage 01 - 按输入数据格式命名的四个模板（4）
+    # 01 系列按「输入数据格式」而非「数据集」命名：数据集是下游项目的资产，
+    # 格式才是框架该提供的可复用骨架。模板默认指向 data/_subset/ 夹具。
+    {"name": "01_template_10x_mtx", "notebook": "notebooks/01_per_dataset/01_template_10x_mtx.ipynb", "expected_stage": "01_qcd"},
+    {"name": "01_template_10x_h5", "notebook": "notebooks/01_per_dataset/01_template_10x_h5.ipynb", "expected_stage": "01_qcd"},
+    {"name": "01_template_h5ad", "notebook": "notebooks/01_per_dataset/01_template_h5ad.ipynb", "expected_stage": "01_qcd"},
+    {"name": "01_template_counts_matrix", "notebook": "notebooks/01_per_dataset/01_template_counts_matrix.ipynb", "expected_stage": "01_qcd"},
     # Stage 02-06 - core pipeline (5)
     {"name": "02_merged", "notebook": "notebooks/02_merged.ipynb", "expected_stage": "02_merged"},
     {"name": "03_normalized", "notebook": "notebooks/03_normalized.ipynb", "expected_stage": "03_normalized"},

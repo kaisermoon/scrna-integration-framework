@@ -11,15 +11,88 @@ src/notebook 边界铁律（2026-07-10 PI 定稿）：进 src/ 的仅为技术�
 
 from __future__ import annotations
 
+import re
 import warnings
 
 import numpy as np
 import pandas as pd
 
-
 # =============================================================================
 # 基因 ID 双向同步（mygene 在线查询 + 批量处理）
 # =============================================================================
+
+
+def _is_ensembl_id(gene_id: str) -> bool:
+    """判断 gene_id 是否为 Ensembl ID 格式。
+
+    Ensembl ID 以 "ENS" 开头（ENSG/ENSMUSG/ENSRNOG/ENSDARG 等），
+    兼容人类、小鼠、大鼠、斑马鱼等常见模式生物。
+    大小写不敏感（转大写后判断）。
+    """
+    return str(gene_id).upper().startswith("ENS")
+
+
+def _infer_species_from_ensembl_prefix(gene_id: str) -> str:
+    """从单个 Ensembl ID 前缀推断 mygene species 参数。
+
+    Returns
+    -------
+    str
+        "human" / "mouse" / "rat" / "all"（无法判断时返回 "all"，
+        mygene 在此模式下不加 species 过滤，通配所有物种）。
+    """
+    gid = str(gene_id).upper()
+    if gid.startswith("ENSMUSG"):
+        return "mouse"
+    if gid.startswith("ENSRNOG"):
+        return "rat"
+    if gid.startswith("ENSG"):
+        return "human"
+    return "all"
+
+
+def _infer_species_from_batch_ensembl_ids(gene_ids, adata=None) -> str:
+    """从一批 Ensembl ID 推断多数（majority）物种，用于 mygene 批量查询。
+
+    采样前 20 个基因 ID，按前缀统计物种，返回多数派。
+    若无法判断（全部为 non-ENS 或出现平票），回退到 adata.uns['species']
+    再做归一化映射，最终回退 'human'。
+
+    Parameters
+    ----------
+    gene_ids : iterable
+        基因 ID 列表（可以是 Ensembl ID 或 symbol）。
+    adata : AnnData, optional
+        当多数投票失败时，从此对象的 adata.uns['species'] 读取物种信息。
+
+    Returns
+    -------
+    str
+        mygene querymany(species=...) 参数值。
+    """
+    from collections import Counter
+
+    species_votes = []
+    for gid in list(gene_ids)[:20]:
+        s = _infer_species_from_ensembl_prefix(gid)
+        if s != "all":
+            species_votes.append(s)
+
+    if species_votes:
+        return Counter(species_votes).most_common(1)[0][0]
+
+    # 多数投票失败 → 回退 adata.uns['species']（做归一化映射）
+    if adata is not None and "species" in adata.uns:
+        sp_raw = str(adata.uns["species"]).lower()
+        _species_norm = {
+            "human": "human", "homo_sapiens": "human",
+            "mouse": "mouse", "mus_musculus": "mouse",
+            "rat": "rat", "rattus_norvegicus": "rat",
+        }
+        return _species_norm.get(sp_raw, "human")
+
+    # 最终回退 human
+    return "human"
 
 
 def sync_gene_ids(adata, gene_id_format: str = "auto") -> None:
@@ -35,7 +108,7 @@ def sync_gene_ids(adata, gene_id_format: str = "auto") -> None:
     不转换会导致 sc.pp.normalize_total 等函数因为 key lookup 失败而 crash。
     """
     idx_sample = str(adata.var.index[0])
-    is_ensembl = idx_sample.startswith("ENSG")
+    is_ensembl = _is_ensembl_id(idx_sample)
 
     if gene_id_format == "symbol" or (gene_id_format == "auto" and not is_ensembl):
         _sync_symbol_to_ensembl(adata)
@@ -58,7 +131,7 @@ def _sync_symbol_to_ensembl(adata) -> None:
     if "gene_ids" in adata.var.columns:
         gene_ids = adata.var["gene_ids"]
         adata.var["ensembl_id"] = gene_ids.where(
-            gene_ids.astype(str).str.startswith("ENSG"), ""
+            gene_ids.astype(str).str.upper().str.startswith("ENS"), ""
         )
         n_mapped = (adata.var["ensembl_id"] != "").sum()
         if n_mapped > 0:
@@ -116,29 +189,149 @@ def _mygene_symbol_to_ensembl(adata) -> None:
 def _sync_ensembl_to_symbol(adata) -> None:
     """var.index 是 Ensembl ID；转换为 gene symbol。
 
-    优先使用 var 中的 feature_name 列（CELLxGENE 惯例），
-    不存在则回退 mygene 在线查询。
-    """
-    # CELLxGENE 导出的 h5ad 常有 feature_name 列存储 gene symbol
-    if "feature_name" in adata.var.columns:
-        symbol_map = adata.var["feature_name"].to_dict()
-        adata.var["_orig_ensembl"] = adata.var.index.values
-        new_index = [symbol_map.get(eid, eid) for eid in adata.var.index]
-        adata.var.index = new_index
-        adata.var.index.name = None
-        adata.var["ensembl_id"] = adata.var["_orig_ensembl"]
-        del adata.var["_orig_ensembl"]
-        n_mapped = sum(1 for v in new_index if not str(v).startswith("ENSG"))
-        if n_mapped > 0:
-            return
-        # feature_name 没帮上忙（可能也是 ENSG 格式）；回退 mygene
+    三层优先级策略：
+    ① feature_name 列（CELLxGENE 惯例，离线可用，主路径）
+    ② 对 feature_name 中仍未转换的 Ensembl ID（lncRNA/假基因），
+       用 mygene 在线查询二次补全
+    ③ 无 feature_name 列时 mygene 全量兜底在线查询
 
-    # 在线查询 mygene：Ensembl ID → gene symbol
+    每次设置 var_names 后紧跟去重（scanpy 生态硬要求 var.index 唯一），
+    确保同一 gene symbol 对应多条不同 Ensembl ID 时不会因重复索引报错。
+    """
+    # 幂等检查：ensembl_id 列已存在且非全空 → 跳过重复转换
+    if "ensembl_id" in adata.var.columns and adata.var["ensembl_id"].notna().any():
+        return
+
+    # —— ① feature_name 列（CELLxGENE 惯例，离线，主路径） ——
+    # CELLxGENE 导出的 h5ad 通常有 feature_name 列存储 gene symbol，
+    # 优先使用它——离线即可用，无需网络，且已处理无 symbol 基因的 Ensembl ID 回退。
+    if "feature_name" in adata.var.columns:
+        feature_names = adata.var["feature_name"].values.astype(str)
+        n_total = len(feature_names)
+        n_has_symbol = sum(1 for v in feature_names if not _is_ensembl_id(v))
+
+        if n_has_symbol > 0:
+            # 保存原始 Ensembl ID 到 ensembl_id 列
+            original_ensembl = adata.var.index.values.astype(str)
+
+            # 用 feature_name 的值替换 var.index（无 symbol 的基因保留 Ensembl ID）
+            adata.var_names = feature_names
+
+            # 处理重复 gene symbol：对重名追加 -1、-2 等后缀，
+            # 确保 var.index 唯一（scanpy 生态硬要求）
+            if not adata.var.index.is_unique:
+                n_dup = int(adata.var.index.duplicated().sum())
+                adata.var_names_make_unique()
+                print(
+                    f"基因 ID 同步：{n_dup} 个重复 gene symbol 已自动去重 "
+                    f"（追加 -N 后缀）"
+                )
+
+            adata.var["ensembl_id"] = original_ensembl
+
+            n_retained = n_total - n_has_symbol
+            print(
+                f"基因 ID 同步（feature_name）: "
+                f"{n_has_symbol}/{n_total} 个基因转换为 gene symbol，"
+                f"{n_retained} 个基因无已知 symbol 保留 Ensembl ID"
+            )
+
+            # —— ② mygene 二次补全：对 feature_name 中仍是 Ensembl ID 的基因 ——
+            # 为什么需要这一步：CELLxGENE 的 feature_name 对 lncRNA/假基因等
+            # 可能仍保留 Ensembl ID，mygene 在线查询可补全这部分基因的 symbol。
+            _ensg_indices = [
+                i for i, g in enumerate(adata.var.index)
+                if _is_ensembl_id(str(g))
+            ]
+            _n_ensg_remaining = len(_ensg_indices)
+
+            if _n_ensg_remaining > 0:
+                import mygene
+
+                mg = mygene.MyGeneInfo()
+                # 去掉 var_names_make_unique() 追加的 -N 后缀后查询，
+                # 否则拼接后的 ID（如 "ENSG00000123456-1"）在 mygene 中查不到
+                _ensg_to_query = [
+                    re.sub(r"-\d+$", "", str(adata.var.index[i]))
+                    for i in _ensg_indices
+                ]
+                symbol_map: dict[str, str] = {}
+                _batch_species = _infer_species_from_batch_ensembl_ids(
+                    _ensg_to_query, adata
+                )
+
+                batch_size = 1000
+                for batch_start in range(0, len(_ensg_to_query), batch_size):
+                    batch = _ensg_to_query[
+                        batch_start: batch_start + batch_size
+                    ]
+                    try:
+                        results = mg.querymany(
+                            batch, scopes="ensembl.gene", fields="symbol",
+                            species=_batch_species, returnall=False,
+                        )
+                    except Exception:
+                        warnings.warn(
+                            f"mygene 补全查询失败（批次 {batch_start}）；"
+                            f"保留 Ensembl ID 作为索引",
+                            stacklevel=2,
+                        )
+                        continue
+                    for r in results:
+                        query = r.get("query", "")
+                        sym = r.get("symbol")
+                        if sym:
+                            symbol_map[query] = sym
+
+                if symbol_map:
+                    new_index = list(adata.var.index)
+                    n_mapped = 0
+                    for i in _ensg_indices:
+                        clean = re.sub(
+                            r"-\d+$", "", str(adata.var.index[i])
+                        )
+                        if clean in symbol_map:
+                            new_index[i] = symbol_map[clean]
+                            n_mapped += 1
+
+                    adata.var_names = new_index
+
+                    # mygene 补全后再次检查重复：
+                    # 新返回的 symbol 可能与已有 symbol 冲突
+                    if not adata.var.index.is_unique:
+                        n_dup_after = int(
+                            adata.var.index.duplicated().sum()
+                        )
+                        adata.var_names_make_unique()
+                        print(
+                            f"mygene 补全后去重：{n_dup_after} 个重复 symbol "
+                            f"追加 -N 后缀"
+                        )
+
+                    print(
+                        f"mygene 补全: {n_mapped} 个基因新增 symbol"
+                        f"（共 {_n_ensg_remaining} 个 ENSG 基因查询）"
+                    )
+                else:
+                    print(
+                        f"mygene 补全: 0 个基因新增 symbol"
+                        f"（共 {_n_ensg_remaining} 个 ENSG 基因查询，"
+                        f"全部未命中）"
+                    )
+
+            return
+        # feature_name 全是 Ensembl 格式（无真实 symbol）→ 回退 mygene 全量兜底
+        # 注意：此时尚未修改 var.index 或添加 ensembl_id 列，无需回滚
+
+    # —— ③ 无 feature_name 列时 mygene 全量兜底 ——
     import mygene
 
     mg = mygene.MyGeneInfo()
     ensembl_ids = list(adata.var.index)
     symbol_map_result: dict[str, str] = {}
+    _fallback_species = _infer_species_from_batch_ensembl_ids(
+        ensembl_ids, adata
+    )
 
     batch_size = 1000
     for i in range(0, len(ensembl_ids), batch_size):
@@ -146,7 +339,7 @@ def _sync_ensembl_to_symbol(adata) -> None:
         try:
             results = mg.querymany(
                 batch, scopes="ensembl.gene", fields="symbol",
-                species="human", returnall=False,
+                species=_fallback_species, returnall=False,
             )
         except Exception:
             warnings.warn(
@@ -162,12 +355,21 @@ def _sync_ensembl_to_symbol(adata) -> None:
 
     adata.var["_orig_ensembl"] = adata.var.index.values
     new_index = [symbol_map_result.get(eid, eid) for eid in adata.var.index]
-    adata.var.index = new_index
-    adata.var.index.name = None
+    adata.var_names = new_index
+
+    # mygene 查询后检查重复：同一 symbol 可能对应多个 Ensembl ID
+    if not adata.var.index.is_unique:
+        n_dup = int(adata.var.index.duplicated().sum())
+        adata.var_names_make_unique()
+        print(
+            f"基因 ID 同步（mygene）: {n_dup} 个重复 gene symbol "
+            f"已自动去重（追加 -N 后缀）"
+        )
+
     adata.var["ensembl_id"] = adata.var["_orig_ensembl"]
     del adata.var["_orig_ensembl"]
 
-    n_missing = sum(1 for v in new_index if str(v).startswith("ENSG"))
+    n_missing = sum(1 for v in new_index if _is_ensembl_id(str(v)))
     if n_missing > 0:
         warnings.warn(
             f"基因 ID 同步: {n_missing}/{len(ensembl_ids)} 个 Ensembl ID 无法通过 "
@@ -175,7 +377,7 @@ def _sync_ensembl_to_symbol(adata) -> None:
             f"对应基因的 ensembl_id 留空。",
             stacklevel=2,
         )
-        mask = adata.var.index.astype(str).str.startswith("ENSG")
+        mask = [_is_ensembl_id(str(v)) for v in adata.var.index]
         adata.var.loc[mask, "ensembl_id"] = ""
 
 

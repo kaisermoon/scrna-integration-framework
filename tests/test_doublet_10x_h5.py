@@ -1,6 +1,6 @@
-"""测试 P1-c-kim：决策8 doublet 三态处理（singlet/uncertain/doublet）。
+"""测试 10x h5 格式模板：决策8 doublet 三态处理（singlet/uncertain/doublet）。
 
-所有测试只针对 notebooks/01_per_dataset/01_kim.ipynb 的 doublet 逻辑。
+所有测试只针对 notebooks/01_per_dataset/01_template_10x_h5.ipynb 的 doublet 逻辑。
 禁改共享参数化测试 test_pr1b1_stage01_02_input.py / test_pr1b2_notebook_02_04.py。
 """
 from __future__ import annotations
@@ -28,7 +28,7 @@ _NOTEBOOK_PATH = (
     Path(__file__).resolve().parents[1]
     / "notebooks"
     / "01_per_dataset"
-    / "01_kim.ipynb"
+    / "01_template_10x_h5.ipynb"
 )
 
 

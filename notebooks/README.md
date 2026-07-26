@@ -6,7 +6,7 @@ scRNA-seq 整合分析框架的完整分析流水线，按数字编号顺序执�
 
 | 编号 | Notebook | 功能 | 输入 | 输出 |
 |------|----------|------|------|------|
-| 01 | `01_*_loaded.ipynb` (per-dataset) | 数据加载 + QC | raw data (h5/mtx/h5ad) | `results/01_*_qcd_v1.h5ad` |
+| 01 | `01_per_dataset/01_template_{fmt}.ipynb` | 数据加载 + QC | raw data (10x_mtx / 10x_h5 / h5ad / tsv_matrix) | `results/01_*_v1.h5ad` |
 | 02 | `02_merged.ipynb` | 多数据集合并 + 合并诊断 | 01 各数据集产物 | `results/02_merged_v1.h5ad` |
 | 03 | `03_normalized.ipynb` | 归一化 + HVG 选择 | 02 产物 | `results/03_normalized_v1.h5ad` |
 | 04 | `04_embedded.ipynb` | PCA/Harmony/scVI 嵌入 | 03 产物 | `results/04_embedded_v1.h5ad` |
@@ -44,7 +44,7 @@ scRNA-seq 整合分析框架的完整分析流水线，按数字编号顺序执�
 ## 典型工作流
 
 ```
-全局分析:  01(x5) -> 02 -> 03 -> 04 -> 05 -> 06 -> 06b -> D01-D14(按需)
+全局分析:  01(每来源一次) -> 02 -> 03 -> 04 -> 05 -> 06 -> 06b -> D01-D14(按需)
 
 上皮精细分析:  06 -> 06c(epithelial subset) -> 06b(subset mode) -> D04 -> D14
 

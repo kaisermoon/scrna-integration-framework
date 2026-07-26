@@ -1,4 +1,4 @@
-"""P1-e: UX 骨架测试 — nowicki（PARAMS 四组化 + 四要素注释 + preflight 校验 + 红线守卫）。
+"""P1-e: UX 骨架测试 — h5ad 格式模板（PARAMS 四组化 + 四要素注释 + preflight 校验 + 红线守卫）。
 
 覆盖：
 1. 参数默认值保真（13 个变量名与默认值逐字不变）
@@ -28,11 +28,11 @@ import pytest
 # 路径常量
 # ============================================================================
 
-_NOTEBOOK_PATH = Path(__file__).resolve().parent.parent / "notebooks" / "01_per_dataset" / "01_nowicki.ipynb"
+_NOTEBOOK_PATH = Path(__file__).resolve().parent.parent / "notebooks" / "01_per_dataset" / "01_template_h5ad.ipynb"
 
 # 重构前基线默认值（逐字不变守卫）
 _BASELINE_PARAMS = {
-    "MANIFEST_PATH": "data/nowicki/manifest.yaml",
+    "MANIFEST_PATH": "data/_subset/h5ad/manifest.yaml",
     "RUN_ID": "01-nowicki-v1-run001",
     "RUN_ROOT": "results/runs",
     "OUTPUT_FILENAME": "01_nowicki_v1.h5ad",

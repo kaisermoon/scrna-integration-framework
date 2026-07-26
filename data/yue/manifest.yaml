@@ -1,11 +1,12 @@
 # Yue et al. — GCPL scRNA-seq: gastric organoid cultures
-# 29 txt.gz count files, tab-separated, gene symbols
+# 29 个 gzip tab 分隔计数表（gene symbol 行名）
+# 格式取值统一为 tsv_matrix（框架四种输入格式之一：10x_mtx / 10x_h5 / h5ad / tsv_matrix）
 # IM3O / BO / AO organoid lines
 
 species: "human"
 
 input:
-  format: "txt.gz"
+  format: "tsv_matrix"
   path: "data/_subset/yue"
   gene_id_format: "symbol"
 

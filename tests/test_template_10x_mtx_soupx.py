@@ -1,6 +1,6 @@
-"""测试 P1-b-nancang：决策3 SoupX counts_soupx layer + 决策8 doublet 三态 + 决策9 status.json 判定。
+"""测试 10x mtx 格式模板：决策3 SoupX counts_soupx layer + 决策8 doublet 三态 + 决策9 status.json 判定。
 
-所有测试静态检查 notebooks/01_per_dataset/01_nancang.ipynb 的 cell 源码，
+所有测试静态检查 notebooks/01_per_dataset/01_template_10x_mtx.ipynb 的 cell 源码，
 不跑 R、不跑 scrublet 端到端（遵守防超时铁律）。
 参照 test_pr1b1_stage01_02_input.py 的 _nb/_cell helper 风格。
 
@@ -16,7 +16,7 @@ import pytest
 # ---- helpers ----------------------------------------------------------------
 
 ROOT = Path(__file__).resolve().parents[1]
-_NB_PATH = ROOT / "notebooks" / "01_per_dataset" / "01_nancang.ipynb"
+_NB_PATH = ROOT / "notebooks" / "01_per_dataset" / "01_template_10x_mtx.ipynb"
 
 
 def _nb() -> dict:
@@ -67,8 +67,8 @@ def _params_combined() -> str:
                 sources.append(next_src)
     if sources:
         return "\n".join(sources)
-    # fallback: 旧结构单 # === PARAMS === cell
-    return _source("# === PARAMS ===")
+    # fallback: 单一 PARAMS cell 结构（模板已合并为「唯一参数入口」单 cell）
+    return _source("# === PARAMS")
 
 
 def _cell_indices(nb: dict, marker: str, cell_type: str = "code") -> list[int]:
@@ -93,7 +93,7 @@ class TestCellOrdering:
         """SoupX cell 出现在 doublet cell 之前。"""
         nb = _nb()
         soupx_indices = _cell_indices(nb, "环境 RNA 校正（SoupX）—— subprocess Rscript 模式")
-        dbl_indices = _cell_indices(nb, "双细胞鉴定（决策8）：三态定级")
+        dbl_indices = _cell_indices(nb, "双细胞鉴定：per-sample scrublet（三态定级）")
         assert soupx_indices and dbl_indices, "SoupX 或 doublet cell 不存在"
         assert max(soupx_indices) < min(dbl_indices), (
             f"SoupX cell(s) at {soupx_indices} 应在 doublet cell(s) at {dbl_indices} 之前"
@@ -104,7 +104,7 @@ class TestCellOrdering:
         nb = _nb()
         soupx_i = _cell_indices(nb, "环境 RNA 校正（SoupX）—— subprocess Rscript 模式")[-1]
         qc_i = _cell_indices(nb, "SoupX 校正后 QC 重算", cell_type="markdown")[0]
-        dbl_i = _cell_indices(nb, "双细胞鉴定（决策8）：三态定级")[0]
+        dbl_i = _cell_indices(nb, "双细胞鉴定：per-sample scrublet（三态定级）")[0]
         assert soupx_i < qc_i < dbl_i, (
             f"顺序错误: SoupX({soupx_i}) < QC({qc_i}) < doublet({dbl_i})"
         )
@@ -112,7 +112,7 @@ class TestCellOrdering:
     def test_doublet_include_after_doublet(self):
         """doublet include 收尾 cell 在 doublet code 之后。"""
         nb = _nb()
-        dbl_i = _cell_indices(nb, "双细胞鉴定（决策8）：三态定级")[0]
+        dbl_i = _cell_indices(nb, "双细胞鉴定：per-sample scrublet（三态定级）")[0]
         inc_i = _cell_indices(nb, "双细胞三态收尾", cell_type="markdown")[0]
         assert dbl_i < inc_i, (
             f"doublet include({inc_i}) 应在 doublet detection({dbl_i}) 之后"
@@ -225,20 +225,20 @@ class TestDoubletThreeState:
 
     def test_doublet_columns_initialized(self):
         """doublet cell 初始化四个 obs 列。"""
-        src = _source("双细胞鉴定（决策8）：三态定级")
+        src = _source("双细胞鉴定：per-sample scrublet（三态定级）")
         for col in ["doublet_score", "doublet_class", "predicted_doublet", "doublet_include"]:
             assert col in src, f"doublet cell 应初始化 {col} 列"
 
     def test_three_state_classification(self):
         """doublet cell 含三态定级（singlet/uncertain/doublet）。"""
-        src = _source("双细胞鉴定（决策8）：三态定级")
+        src = _source("双细胞鉴定：per-sample scrublet（三态定级）")
         assert '"singlet"' in src, "三态应含 singlet"
         assert '"uncertain"' in src, "三态应含 uncertain"
         assert '"doublet"' in src, "三态应含 doublet"
 
     def test_include_derivation_in_include_cell(self):
         """include cell 含 doublet_include 派生逻辑。"""
-        src = _source("双细胞三态收尾：include 列派生")
+        src = _source("双细胞三态收尾：include 派生 + doublet_contract 持久化")
         assert "doublet_include" in src
 
     def test_predicted_doublet_backcompat(self):
@@ -259,34 +259,34 @@ class TestCheckpointHdGuard:
 
     def test_hd_guard_present(self):
         """checkpoint 含 _hd = 'doublet_class' in adata.obs。"""
-        src = _source("Checkpoint：写入 per-dataset")
+        src = _source("Checkpoint：run_contract + 写入 h5ad + schema 校验")
         assert '_hd = "doublet_class" in adata.obs' in src, (
             "checkpoint 应有 _hd guard"
         )
 
     def test_doublet_columns_present_postcondition(self):
         """checkpoint 含 doublet_columns_present 键。"""
-        src = _source("Checkpoint：写入 per-dataset")
+        src = _source("Checkpoint：run_contract + 写入 h5ad + schema 校验")
         assert "doublet_columns_present" in src
 
     def test_doublet_contract_present_postcondition(self):
         """checkpoint 含 doublet_contract_present 键。"""
-        src = _source("Checkpoint：写入 per-dataset")
+        src = _source("Checkpoint：run_contract + 写入 h5ad + schema 校验")
         assert "doublet_contract_present" in src
 
     def test_doublet_class_valid_postcondition(self):
         """checkpoint 含 doublet_class_valid 键。"""
-        src = _source("Checkpoint：写入 per-dataset")
+        src = _source("Checkpoint：run_contract + 写入 h5ad + schema 校验")
         assert "doublet_class_valid" in src
 
     def test_doublet_include_consistent_postcondition(self):
         """checkpoint 含 doublet_include_consistent 键。"""
-        src = _source("Checkpoint：写入 per-dataset")
+        src = _source("Checkpoint：run_contract + 写入 h5ad + schema 校验")
         assert "doublet_include_consistent" in src
 
     def test_hd_else_true_pattern(self):
         """doublet postconditions 用 if _hd else True 模式。"""
-        src = _source("Checkpoint：写入 per-dataset")
+        src = _source("Checkpoint：run_contract + 写入 h5ad + schema 校验")
         count = src.count("if _hd else True")
         assert count >= 3, f"应有 >=3 处 if _hd else True guard，实际 {count}"
 
@@ -299,29 +299,29 @@ class TestNeedsReview:
 
     def test_needs_review_passed_to_determine_stage_status(self):
         """checkpoint 调用 determine_stage_status 传 needs_review=。"""
-        src = _source("Checkpoint：写入 per-dataset")
+        src = _source("Checkpoint：run_contract + 写入 h5ad + schema 校验")
         assert "determine_stage_status({}, hard_postconditions, needs_review=" in src, (
             "checkpoint 必须传 needs_review 给 determine_stage_status"
         )
 
     def test_doublet_needs_review_captured(self):
         """checkpoint 获取 doublet_needs_review。"""
-        src = _source("Checkpoint：写入 per-dataset")
+        src = _source("Checkpoint：run_contract + 写入 h5ad + schema 校验")
         assert "doublet_needs_review" in src
 
     def test_soupx_needs_review_captured(self):
         """checkpoint 获取 soupx_needs_review。"""
-        src = _source("Checkpoint：写入 per-dataset")
+        src = _source("Checkpoint：run_contract + 写入 h5ad + schema 校验")
         assert "soupx_needs_review" in src
 
     def test_needs_review_branch_present(self):
         """checkpoint 含 NEEDS_REVIEW 分支处理。"""
-        src = _source("Checkpoint：写入 per-dataset")
+        src = _source("Checkpoint：run_contract + 写入 h5ad + schema 校验")
         assert "NEEDS_REVIEW" in src, "checkpoint 应有 NEEDS_REVIEW 分支"
 
     def test_soupx_summary_in_checkpoint(self):
         """NEEDS_REVIEW 分支含 soupx_summary。"""
-        src = _source("Checkpoint：写入 per-dataset")
+        src = _source("Checkpoint：run_contract + 写入 h5ad + schema 校验")
         assert "soupx_summary" in src, "checkpoint NEEDS_REVIEW 应写 soupx_summary"
 
 
@@ -339,12 +339,12 @@ class TestCountsLayerUnchanged:
 
     def test_counts_layer_unchanged_postcondition(self):
         """checkpoint hard_postconditions 含 counts_layer_unchanged。"""
-        src = _source("Checkpoint：写入 per-dataset")
+        src = _source("Checkpoint：run_contract + 写入 h5ad + schema 校验")
         assert "counts_layer_unchanged" in src, "checkpoint 应有 counts_layer_unchanged"
 
     def test_checksum_compare_in_checkpoint(self):
         """checkpoint 比对 _counts_checksum 当前值。"""
-        src = _source("Checkpoint：写入 per-dataset")
+        src = _source("Checkpoint：run_contract + 写入 h5ad + schema 校验")
         assert "_counts_checksum" in src, "checkpoint 应引用 _counts_checksum"
 
 
@@ -356,7 +356,7 @@ class TestNDoubletsTotal:
 
     def test_n_doublets_total_defined(self):
         """include cell 含 n_doublets_total = n_dbl。"""
-        src = _source("双细胞三态收尾：include 列派生")
+        src = _source("双细胞三态收尾：include 派生 + doublet_contract 持久化")
         assert "n_doublets_total = n_dbl" in src, (
             "include cell 必须定义 n_doublets_total（防 QC 报告 cell NameError）"
         )
@@ -401,7 +401,7 @@ class TestDoubletContract:
 
     def test_doublet_contract_keys(self):
         """doublet_contract 含必要主键。"""
-        src = _source("双细胞三态收尾：include 列派生")
+        src = _source("双细胞三态收尾：include 派生 + doublet_contract 持久化")
         for key in ["method", "per_sample_thresholds", "needs_review", "random_seed",
                      "n_singlet", "n_uncertain", "n_doublet", "n_excluded"]:
             assert key in src, f"doublet_contract 缺少: {key}"
@@ -422,17 +422,17 @@ class TestSharedTestCompatibility:
     def test_checkpoint_cell_parseable(self):
         """Checkpoint cell 可独立 parse。"""
         import ast
-        src = _source("Checkpoint：写入 per-dataset")
+        src = _source("Checkpoint：run_contract + 写入 h5ad + schema 校验")
         ast.parse(src)
 
     def test_checkpoint_uses_snapshot_with_globals(self):
         """Checkpoint 含 snapshot_effective_parameters(globals()...)。"""
-        src = _source("Checkpoint：写入 per-dataset")
+        src = _source("Checkpoint：run_contract + 写入 h5ad + schema 校验")
         assert "snapshot_effective_parameters(globals()" in src
 
     def test_checkpoint_uses_collect_runtime_provenance(self):
         """Checkpoint 含 collect_runtime_provenance。"""
-        src = _source("Checkpoint：写入 per-dataset")
+        src = _source("Checkpoint：run_contract + 写入 h5ad + schema 校验")
         assert "collect_runtime_provenance" in src
 
     def test_no_run_contract_helper_redefinitions(self):

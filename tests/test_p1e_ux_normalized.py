@@ -242,8 +242,10 @@ class TestParamsRestructure:
             "03-params-compute-md", "03-params-compute",
             "03-params-output-md", "03-params-output",
         ]
-        assert between == expected_md_code_alternating, (
-            f"PARAMS cell 顺序不匹配:\n  实际: {between}\n  期望: {expected_md_code_alternating}"
+        # 只断言 8 个 PARAMS cell 连续且顺序正确；其后允许追加说明性
+        # markdown cell（如"回跑与迭代"引导），避免文档补充误判为结构破坏。
+        assert between[: len(expected_md_code_alternating)] == expected_md_code_alternating, (
+            f"PARAMS cell 顺序不匹配:\n  实际: {between}\n  期望前缀: {expected_md_code_alternating}"
         )
 
     def test_params_md_cells_are_markdown(self) -> None:

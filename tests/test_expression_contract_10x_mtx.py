@@ -44,7 +44,7 @@ def _build_synthetic_nancang_adata(
 def _establish_contract_nancang(adata: anndata.AnnData) -> dict:
     """在 adata 上建立 Nancang 的 expression_contract + layers['counts']。
 
-    与 01_nancang.ipynb 中 expression_contract cell 的实现保持一致。
+    与 01_template_10x_mtx.ipynb 中 expression_contract cell 的实现保持一致。
     返回建立后的 contract dict。
     """
     adata.layers["counts"] = sp.csr_matrix(adata.X, dtype=np.float32)
@@ -256,7 +256,7 @@ class TestEdgeCases:
 
 
 class TestNotebookIntegration:
-    """模拟 01_nancang.ipynb 从数据加载到 checkpoint 的 counts 契约流程。"""
+    """模拟 01_template_10x_mtx.ipynb 从数据加载到 checkpoint 的 counts 契约流程。"""
 
     def test_full_flow_load_to_checkpoint(self) -> None:
         """端到端：数据加载 → 建 counts 契约 → checkpoint 校验。"""

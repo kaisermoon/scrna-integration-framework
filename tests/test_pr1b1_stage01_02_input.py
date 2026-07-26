@@ -14,9 +14,12 @@ import scipy.sparse as sp
 
 import scrna_integration.run_contract as rc
 ROOT = Path(__file__).parents[1]
+# 模板 notebook → source_dataset 映射（测试用）
 SOURCES = {
-    "01_kim.ipynb": "Kim_2023", "01_nancang.ipynb": "Nancang_2025",
-    "01_nowicki.ipynb": "Nowicki_2023", "01_yue.ipynb": "Yue_2024",
+    "01_template_10x_mtx.ipynb": "Nancang_2025",
+    "01_template_10x_h5.ipynb": "Kim_2023",
+    "01_template_h5ad.ipynb": "Nowicki_2023",
+    "01_template_counts_matrix.ipynb": "Yue_2024",
 }
 NB01 = [f"notebooks/01_per_dataset/{name}" for name in SOURCES]
 NB02 = "notebooks/02_merged.ipynb"
@@ -60,7 +63,11 @@ def _params_source(path: str) -> str:
                 group_sources.append(_source(cells[i + 1]))
     if group_sources:
         return "\n".join(group_sources)
-    # 2. cell-id 定位（nowicki）：aae03603 + p1e_params_g*_code
+    # 2. `# === PARAMS` 前缀匹配（h5ad / 10x_h5 / counts_matrix templates）
+    for cell in cells:
+        if cell.get("cell_type") == "code" and "# === PARAMS" in _source(cell):
+            return _source(cell)
+    # 3. cell-id 定位（备用兼容）
     id_sources = [
         _source(c) for c in cells
         if (c.get("id", "").startswith("p1e_params_g") and c.get("id", "").endswith("_code"))
@@ -68,8 +75,7 @@ def _params_source(path: str) -> str:
     ]
     if id_sources:
         return "\n".join(id_sources)
-    # 3. 旧式单 cell（kim / yue）
-    return _cell(path, "# === PARAMS ===")
+    raise AssertionError(f"{path}: 未找到 PARAMS cell")
 
 class _Adata:
     def __init__(self, source: str, n_obs: int = 2, layers: dict | None = None) -> None:

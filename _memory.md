@@ -2,8 +2,8 @@
 title: "项目记忆：scRNA-seq整合分析框架"
 type: project-memory
 project_id: "scrna-integration-framework"
-last_session: "2026-07-17"
-updated: "2026-07-17"
+last_session: "2026-07-26"
+updated: "2026-07-26"
 ---
 
 # 项目记忆：scRNA-seq整合分析框架
@@ -15,6 +15,37 @@ updated: "2026-07-17"
 ## 当前状态
 
 **phase = analysis**。2026-06-05 由 `/kickoff` 新建。代码工程完成、23-stage 管线打通，早已过 planning 阶段。
+
+## 💾 会话保存点（2026-07-26，per-dataset 模板按格式重构 + 教训回填，工作区未提交）
+
+**分支 `refactor/format-templates-and-lesson-backport`，与 main 无 commit 差异，全部改动积压工作区（38 文件，+2423/-9319）。**
+
+### 重构内容
+
+per-dataset notebook 从「按数据集命名」改为「按输入格式命名」，接新数据集时选格式而非复制同类 notebook：
+
+- **删除**：四个数据集专属 notebook（原 01_kim / 01_nancang / 01_nowicki / 01_yue）+ 旧 `01_template_10x`
+- **新增四模板**：`01_template_10x_h5`（31 cells）/ `01_template_10x_mtx`（46）/ `01_template_counts_matrix`（39）/ `01_template_h5ad`（27）
+- **测试同步改名**：doublet / expression_contract / ux / soupx 四组按格式命名（如 `test_p1c_doublet_kim` → `test_doublet_10x_h5`）
+- **新增** `docs/per-dataset-notebook-conventions.md`（约 340 行）：多数据集接入的通用技术教训按主题分节，每条含做法 + 失败现象，面向非计算机专业研究者。首条为 10X 目录「双层优先、扁平后备」发现逻辑
+- **`io.py` +246 行** + 新增 `tests/test_io_gene_sync.py`（约 470 行，Ensembl ID 判别 / 物种推断 / symbol 同步；mygene 查询全 mock，禁止测试发网络请求）
+- `platform.py` / `run_contract.py` / `scripts/soupx_run.R` 小幅改动；`docs/audit/` 仍未跟踪
+
+### 测试状态
+
+**全绿：1249 passed，覆盖率 89.88%**（阈值 70%）。
+
+修掉一个既有回归：`test_p1e_ux_normalized.py::test_params_cells_in_correct_order` 断言 03-title 与 03-setup 之间**恰好**是 8 个 PARAMS cell，而 07-18「回跑与迭代」引导 markdown cell（id `892c1480`）插在 PARAMS 之后 → 失败。经 stash 验证该失败在已提交状态即存在，**非本次重构引入**。改为断言 8 个 PARAMS cell 为连续前缀，其后允许追加说明性 markdown，避免文档补充被误判为结构破坏。
+
+### 待处理
+
+1. **流程闸门未过**：改动规模远超 30 cell 认知复杂度上限，且未经独立 code-reviewer 审查 → 按项目铁律不能提交。需拆成可审查的 PR 分批过 reviewer。
+2. 四个新模板均为静态构建，**运行验证待 PI 在 jupyter 手动跑**（notebook 防超时铁律）。
+3. `_plan.md` 仍停在 2026-07-10，PR 表未反映 07-18 与本次工作。
+
+### 07-18 已提交（此前未记账）
+
+单批次数据保护守卫（01/03/04 + 其余 notebook）、ADR 标记与开发术语清理（03-06）、02 回跑引导 + 06c 交叉引用修正、P1 参数文档（01_yue 23 参数四要素化 / 01_nowicki 集中 PARAMS cell）、CLAUDE.md 瘦身。main = `c87f01d`。
 
 ## 💾 会话保存点（2026-07-17 第三次，05+06 双 notebook UX 审查修复全完成，main = `daeb65c`）
 

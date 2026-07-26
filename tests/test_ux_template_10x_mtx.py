@@ -1,6 +1,6 @@
-"""测试 P1-e-nancang：UX 骨架叶子（PARAMS 四组化 + preflight 校验 + 科学参数四要素注释）。
+"""测试 10x mtx 格式模板：UX 骨架叶子（PARAMS 四组化 + preflight 校验 + 科学参数四要素注释）。
 
-所有测试静态检查 notebooks/01_per_dataset/01_nancang.ipynb 的 cell 结构与源码，
+所有测试静态检查 notebooks/01_per_dataset/01_template_10x_mtx.ipynb 的 cell 结构与源码，
 T6 通过 exec 验证 preflight 校验行为（不依赖 nbconvert 端到端）。
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ import pytest
 # ---- helpers ----------------------------------------------------------------
 
 ROOT = Path(__file__).resolve().parents[1]
-_NB_PATH = ROOT / "notebooks" / "01_per_dataset" / "01_nancang.ipynb"
+_NB_PATH = ROOT / "notebooks" / "01_per_dataset" / "01_template_10x_mtx.ipynb"
 
 
 def _nb() -> dict:

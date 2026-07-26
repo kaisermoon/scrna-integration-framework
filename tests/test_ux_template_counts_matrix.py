@@ -1,4 +1,4 @@
-"""P1-e-yue：01_yue.ipynb UX骨架静态源码断言 + preflight行为测试。
+"""P1-e: counts matrix 格式模板 UX骨架静态源码断言 + preflight行为测试。
 
 覆盖：
 - PARAMS 四组化：### 数据源 / ### QC 阈值 / ### 方法开关 / ### 输出与运行标识
@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,7 @@ import pytest
 
 NB_PATH = (
     Path(__file__).resolve().parent.parent
-    / "notebooks" / "01_per_dataset" / "01_yue.ipynb"
+    / "notebooks" / "01_per_dataset" / "01_template_counts_matrix.ipynb"
 )
 
 # 科学参数默认值（与 notebook PARAMS 保持同步）
@@ -367,7 +368,7 @@ class TestRedlineIntegrity:
         )
 
     def test_no_dir_in_redline_cells(self):
-        """redline 五 cell 不含 dir()。"""
+        """redline 五 cell 不含裸 dir()（用词边界避免 iterdir() 假阳性）。"""
         nb = _load_nb()
         redline_ids = ["717b91ba", "be34c1dd", "8c9316b7", "ee38cf39", "30a91364"]
         for cid in redline_ids:
@@ -375,7 +376,7 @@ class TestRedlineIntegrity:
             if cell is None:
                 continue
             src = _cell_source(cell)
-            assert "dir()" not in src, f"redline cell {cid} 含 dir()"
+            assert re.search(r"\bdir\(\)", src) is None, f"redline cell {cid} 含 dir()"
 
     def test_no_redefinition(self):
         """notebook 不重定义 run_contract 中已有函数。"""
